@@ -1,7 +1,13 @@
+/**
+ * 前端请求与显示工具：统一 JSON 请求、同源凭据、修改请求头及错误处理。
+ * 逐文件说明见项目根目录《项目结构与代码说明.md》。
+ */
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (options.method && options.method !== 'GET') headers.set('X-Album-Client', '1');
-  if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
+  if (options.body && !(options.body instanceof FormData))
+    headers.set('Content-Type', 'application/json');
   const response = await fetch('/api' + path, { ...options, headers, credentials: 'same-origin' });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `请求失败（${response.status}）`);
@@ -14,5 +20,9 @@ export function formatBytes(bytes: number) {
 }
 export function formatDate(value: string) {
   const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date).replaceAll('/', '.');
+  return Number.isNaN(date.valueOf())
+    ? value
+    : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+        .format(date)
+        .replaceAll('/', '.');
 }

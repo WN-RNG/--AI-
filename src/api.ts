@@ -9,7 +9,17 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   if (options.body && !(options.body instanceof FormData))
     headers.set('Content-Type', 'application/json');
   const response = await fetch('/api' + path, { ...options, headers, credentials: 'same-origin' });
-  const data = await response.json().catch(() => ({}));
+  let data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    // A cancelled response body must remain cancelled, never become successful empty data.
+    if (options.signal?.aborted) throw options.signal.reason ?? error;
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    throw new Error(`服务响应格式异常（${response.status}），请稍后重试`);
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data))
+    throw new Error('服务响应数据异常，请稍后重试');
   if (!response.ok) throw new Error(data.error || `请求失败（${response.status}）`);
   return data as T;
 }

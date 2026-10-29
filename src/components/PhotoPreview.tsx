@@ -89,7 +89,7 @@ export function PhotoPreview({
   const [activeId, setActiveId] = useState(initialId);
   const current = available.find((photo) => photo.id === activeId) ?? available[0];
   const activeIndex = current ? available.findIndex((photo) => photo.id === current.id) : -1;
-  const [showInfo, setShowInfo] = useState(false);
+  const [showInfo, setShowInfo] = useState(true);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>(ZERO);
   const [size, setSize] = useState({ width: 1, height: 1 });

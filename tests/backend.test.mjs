@@ -5,19 +5,24 @@
 
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import sharp from 'sharp';
 import { createApplication } from '../server/app.mjs';
+import {
+  UPLOAD_CONFIRM_BYTES,
+  UPLOAD_MAX_BYTES,
+  UPLOAD_BATCH_SIZE,
+} from '../shared/uploadPolicy.ts';
 
 const inviteCode = process.env.INVITE_CODE || 'FRAME-FIRST-100';
 const password = 'Album-Test-42!';
 
-async function fixture(t, existingDataDir) {
+async function fixture(t, existingDataDir, applicationOptions = {}) {
   const dataDir = existingDataDir || (await mkdtemp(path.join(tmpdir(), 'frame-api-test-')));
-  const application = await createApplication({ dataDir });
+  const application = await createApplication({ dataDir, ...applicationOptions });
   const server = application.app.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -122,11 +127,16 @@ async function sample(format = 'jpeg', withMetadata = false) {
   return image.toFormat(format).toBuffer();
 }
 
-async function upload(client, albumId, files) {
+async function upload(client, albumId, files, { fields = [], fieldsAfterFiles = false } = {}) {
   const form = new FormData();
+  const appendFields = () => {
+    for (const [name, value] of fields) form.append(name, value);
+  };
+  if (!fieldsAfterFiles) appendFields();
   for (const file of files) {
     form.append('photos', new Blob([file.bytes], { type: file.type || 'image/jpeg' }), file.name);
   }
+  if (fieldsAfterFiles) appendFields();
   const result = await client.json(`/api/albums/${albumId}/photos`, { method: 'POST', form });
   return result;
 }
@@ -281,7 +291,7 @@ test('upload decodes actual JPG, PNG and WebP and reports invalid files without 
     ].map(async ([format, name, type]) => ({ name, type, bytes: await sample(format) })),
   );
   const uploaded = await upload(client, created.id, [
-    ...files,
+    ...files.slice(0, 2),
     {
       name: 'pretends-to-be-a-photo.jpg',
       type: 'image/jpeg',
@@ -289,13 +299,16 @@ test('upload decodes actual JPG, PNG and WebP and reports invalid files without 
     },
   ]);
   assert.equal(uploaded.response.status, 201);
-  assert.equal(uploaded.body.photos.length, 3, JSON.stringify(uploaded.body));
+  assert.equal(uploaded.body.photos.length, 2, JSON.stringify(uploaded.body));
   assert.equal(uploaded.body.errors.length, 1);
+  const webp = await upload(client, created.id, [files[2]]);
+  expectSuccess(webp.response, webp.body);
+  const accepted = [...uploaded.body.photos, ...webp.body.photos];
   assert.deepEqual(
-    new Set(uploaded.body.photos.map((photo) => photo.mime)),
+    new Set(accepted.map((photo) => photo.mime)),
     new Set(['image/jpeg', 'image/png', 'image/webp']),
   );
-  for (const photo of uploaded.body.photos) {
+  for (const photo of accepted) {
     assert.equal(photo.width, 180);
     assert.equal(photo.height, 120);
     const thumbnail = await client.request(photo.thumbnailUrl);
@@ -311,6 +324,234 @@ test('upload decodes actual JPG, PNG and WebP and reports invalid files without 
   assert.equal(rejected.response.status, 400);
   assert.equal(rejected.body.errors.length, 1);
   assert.equal((await detail(client, created.id)).photos.length, 3);
+});
+
+// Trailing JPEG padding exercises real multipart byte limits without requiring
+// a huge decoded image or allocating an 80 MP fixture just to test file size.
+function sizedJpeg(image, length) {
+  assert.ok(length >= image.length);
+  const bytes = Buffer.alloc(length);
+  image.copy(bytes);
+  return bytes;
+}
+
+test('20 MiB is normal; larger uploads need explicit consent regardless of multipart field order', async (t) => {
+  const app = await fixture(t);
+  const client = app.client();
+  await register(client, 'large-files');
+  const created = await album(client);
+  const image = await sample();
+  const boundary = await upload(client, created.id, [
+    {
+      name: 'exactly-20.jpg',
+      bytes: sizedJpeg(image, UPLOAD_CONFIRM_BYTES),
+    },
+  ]);
+  expectSuccess(boundary.response, boundary.body);
+  assert.equal(boundary.body.photos[0].bytes, UPLOAD_CONFIRM_BYTES);
+
+  const mixed = await upload(client, created.id, [
+    { name: 'normal.jpg', bytes: image },
+    { name: 'needs-consent.jpg', bytes: sizedJpeg(image, UPLOAD_CONFIRM_BYTES + 1) },
+  ]);
+  assert.equal(mixed.response.status, 201);
+  assert.equal(
+    mixed.body.photos.length,
+    1,
+    'A missing large-file confirmation preserves ordinary files',
+  );
+  assert.equal(mixed.body.photos[0].filename, 'normal.jpg');
+  assert.match(mixed.body.errors[0].error, /确认/);
+
+  const falseConsent = await upload(
+    client,
+    created.id,
+    [
+      {
+        name: 'not-confirmed.jpg',
+        bytes: sizedJpeg(image, UPLOAD_CONFIRM_BYTES + 1),
+      },
+    ],
+    { fields: [['allowLargeFiles', 'false']] },
+  );
+  assert.equal(falseConsent.response.status, 400);
+  assert.match(falseConsent.body.errors[0].error, /确认/);
+
+  for (const fieldsAfterFiles of [false, true]) {
+    const accepted = await upload(
+      client,
+      created.id,
+      [
+        {
+          name: `confirmed-${fieldsAfterFiles}.jpg`,
+          bytes: sizedJpeg(image, UPLOAD_CONFIRM_BYTES + 1),
+        },
+      ],
+      { fields: [['allowLargeFiles', 'true']], fieldsAfterFiles },
+    );
+    expectSuccess(accepted.response, accepted.body);
+    assert.equal(accepted.body.photos[0].bytes, UPLOAD_CONFIRM_BYTES + 1);
+  }
+  assert.equal((await detail(client, created.id)).photos.length, 4);
+  assert.deepEqual(await readdir(path.join(app.dataDir, 'tmp')), []);
+});
+
+test('exactly 30 MiB is accepted after confirmation; hard size/count failures reject and clean the batch', async (t) => {
+  const app = await fixture(t);
+  const client = app.client();
+  await register(client, 'hard-limits');
+  const created = await album(client);
+  const image = await sample();
+  const maximum = await upload(
+    client,
+    created.id,
+    [
+      {
+        name: 'exactly-30.jpg',
+        bytes: sizedJpeg(image, UPLOAD_MAX_BYTES),
+      },
+    ],
+    { fields: [['allowLargeFiles', 'true']] },
+  );
+  expectSuccess(maximum.response, maximum.body);
+  assert.equal(maximum.body.photos[0].bytes, UPLOAD_MAX_BYTES);
+
+  // Standard Multer hard-limit failures roll back the entire hostile batch.
+  // The normal frontend excludes >30 MiB files before forming any batch.
+  const oversized = await upload(
+    client,
+    created.id,
+    [
+      { name: 'ordinary-in-rejected-batch.jpg', bytes: image },
+      { name: 'over-30.jpg', bytes: sizedJpeg(image, UPLOAD_MAX_BYTES + 1) },
+    ],
+    { fields: [['allowLargeFiles', 'true']] },
+  );
+  assert.equal(oversized.response.status, 400);
+  assert.match(oversized.body.error, /30MB/);
+  assert.deepEqual(await readdir(path.join(app.dataDir, 'tmp')), []);
+
+  const tooMany = await upload(
+    client,
+    created.id,
+    Array.from({ length: UPLOAD_BATCH_SIZE + 1 }, (_, index) => ({
+      name: `too-many-${index}.jpg`,
+      bytes: image,
+    })),
+  );
+  assert.equal(tooMany.response.status, 400);
+  assert.match(tooMany.body.error, /3 张/);
+  assert.equal((await detail(client, created.id)).photos.length, 1);
+  assert.deepEqual(await readdir(path.join(app.dataDir, 'tmp')), []);
+});
+
+async function until(predicate, timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  while (!predicate()) {
+    assert.ok(Date.now() < deadline, 'Timed out waiting for the controlled concurrent operation');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+test('concurrent accounts, analysis and demo share one image processor; overload is bounded and retryable', async (t) => {
+  const demoDir = await mkdtemp(path.join(tmpdir(), 'frame-demo-source-'));
+  t.after(() => rm(demoDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const image = await sample();
+  await writeFile(path.join(demoDir, 'kyoto-temple.jpg'), image);
+  const app = await fixture(t, undefined, { demoDir });
+  const clients = Array.from({ length: 5 }, () => app.client());
+  const albums = [];
+  for (let index = 0; index < clients.length; index++) {
+    await register(clients[index], `concurrent-${index}`);
+    albums.push(await album(clients[index]));
+  }
+  const beforeAnalysis = await upload(clients[0], albums[0].id, [
+    { name: 'analyze-me.jpg', bytes: image },
+  ]);
+  expectSuccess(beforeAnalysis.response, beforeAnalysis.body);
+
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let held = false,
+    active = 0,
+    peak = 0;
+  const observed = new Set();
+  for (const method of ['metadata', 'toFile', 'toBuffer', 'stats']) {
+    const original = sharp.prototype[method];
+    t.mock.method(sharp.prototype, method, async function (...args) {
+      active++;
+      peak = Math.max(peak, active);
+      observed.add(method);
+      try {
+        if (method === 'toFile' && !held) {
+          held = true;
+          await gate;
+        }
+        return await original.apply(this, args);
+      } finally {
+        active--;
+      }
+    });
+  }
+
+  const pending = [];
+  try {
+    pending.push(upload(clients[0], albums[0].id, [{ name: 'held.jpg', bytes: image }]));
+    await until(() => held);
+    const analyzing = await clients[0].json(`/api/albums/${albums[0].id}/analyze`, {
+      method: 'POST',
+    });
+    expectSuccess(analyzing.response, analyzing.body);
+    pending.push(clients[1].json('/api/demo', { method: 'POST' }));
+    pending.push(upload(clients[2], albums[2].id, [{ name: 'queued-a.jpg', bytes: image }]));
+    pending.push(
+      upload(clients[3], albums[3].id, [
+        { name: 'broken-while-queued.jpg', bytes: Buffer.from('not a decodable image') },
+        { name: 'queued-b.jpg', bytes: image },
+      ]),
+    );
+    // Allow the admitted requests to receive their multipart bodies and wait.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const overloaded = await upload(clients[4], albums[4].id, [
+      { name: 'retry-later.jpg', bytes: image },
+    ]);
+    assert.equal(overloaded.response.status, 503);
+    assert.equal(overloaded.response.headers.get('Retry-After'), '3');
+    assert.match(overloaded.body.error, /繁忙/);
+    release();
+    const completed = await Promise.all(pending);
+    for (const result of completed) expectSuccess(result.response, result.body);
+    assert.equal(
+      completed[3].body.photos.length,
+      1,
+      'A failed queued image does not discard its valid peer',
+    );
+    assert.equal(completed[3].body.errors[0].filename, 'broken-while-queued.jpg');
+    let status;
+    const deadline = Date.now() + 5000;
+    do {
+      status = await detail(clients[0], albums[0].id);
+      if (status.album.analysisStatus === 'complete') break;
+      assert.notEqual(status.album.analysisStatus, 'error');
+      assert.ok(Date.now() < deadline, 'Queued analysis completes after uploads');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } while (true);
+    assert.equal(
+      peak,
+      1,
+      'Actual Sharp operations never overlap across accounts, analysis or demo',
+    );
+    assert.deepEqual(observed, new Set(['metadata', 'toFile', 'toBuffer', 'stats']));
+    assert.deepEqual(await readdir(path.join(app.dataDir, 'tmp')), []);
+    assert.equal((await detail(clients[4], albums[4].id)).photos.length, 0);
+    const retry = await upload(clients[4], albums[4].id, [{ name: 'retried.jpg', bytes: image }]);
+    expectSuccess(retry.response, retry.body);
+  } finally {
+    release();
+    await Promise.allSettled(pending);
+  }
 });
 
 test('fixed, random and slideshow covers persist and reject photos outside the project', async (t) => {

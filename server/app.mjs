@@ -18,13 +18,23 @@ import { promisify } from 'node:util';
 import { mkdir, readdir, rename, rm, stat, copyFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
+import {
+  UPLOAD_CONFIRM_BYTES,
+  UPLOAD_MAX_BYTES,
+  UPLOAD_BATCH_SIZE,
+} from '../shared/uploadPolicy.ts';
 
 const scrypt = promisify(scryptCallback);
 // libvips' open-file cache can retain upload/thumbnail handles on Windows,
 // preventing an original from being moved or a closed application's data removed.
-sharp.cache({ files: 0 });
-const MAX_BYTES = 20 * 1024 * 1024;
+// Bound native cache/thread usage as well as application-level image jobs below.
+// This reduces contention on small instances without promising an RSS ceiling.
+sharp.cache({ files: 0, memory: 16, items: 32 });
+sharp.concurrency(1);
 const MAX_PIXELS = 80_000_000;
+const IMAGE_WAIT_LIMIT = 6;
+const MEDIA_REQUEST_LIMIT = 4;
+const ANALYSIS_WAIT_LIMIT = 6;
 const SESSION_DAYS = 30;
 const COOKIE = 'frame_session';
 const formats = { jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
@@ -220,6 +230,73 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
   };
   const clients = new Map();
   let closed = false;
+  let closing;
+  const mediaOperations = new Set();
+  const imageJobs = [];
+  const imageIdleWaiters = [];
+  let imageRunning = false;
+  let mediaRequests = 0;
+  const busyError = () => problem(503, '图片处理繁忙，请稍后重试');
+  const closingError = () => problem(503, '服务正在关闭，请稍后重试');
+  const drainImageJobs = async () => {
+    if (imageRunning) return;
+    imageRunning = true;
+    try {
+      while (imageJobs.length) {
+        const job = imageJobs.shift();
+        if (closed) {
+          job.reject(closingError());
+          continue;
+        }
+        try {
+          job.resolve(await job.run());
+        } catch (error) {
+          job.reject(error);
+        }
+      }
+    } finally {
+      imageRunning = false;
+      for (const resolve of imageIdleWaiters.splice(0)) resolve();
+    }
+  };
+  // One shared permit covers upload decoding, analysis and demo transformations.
+  // sharp.concurrency(1) alone only limits threads *within* each native job.
+  const runImageTask = (run) => {
+    if (closed) return Promise.reject(closingError());
+    if (imageRunning && imageJobs.length >= IMAGE_WAIT_LIMIT) return Promise.reject(busyError());
+    return new Promise((resolve, reject) => {
+      imageJobs.push({ run, resolve, reject });
+      void drainImageJobs();
+    });
+  };
+  const waitForImageIdle = () =>
+    imageRunning ? new Promise((resolve) => imageIdleWaiters.push(resolve)) : Promise.resolve();
+  const trackMediaOperation = async (run) => {
+    const operation = Promise.resolve().then(run);
+    mediaOperations.add(operation);
+    try {
+      return await operation;
+    } finally {
+      mediaOperations.delete(operation);
+    }
+  };
+  // Also bound multipart receivers: otherwise waiting jobs could accumulate
+  // arbitrarily many temporary files before reaching the image-task queue.
+  const limitMediaRequests = (_req, res, next) => {
+    if (closed) return next(closingError());
+    if (mediaRequests >= MEDIA_REQUEST_LIMIT) return next(busyError());
+    mediaRequests++;
+    let released = false;
+    const release = () => {
+      if (!released) {
+        released = true;
+        mediaRequests--;
+      }
+    };
+    res.once('finish', release);
+    res.once('close', release);
+    next();
+  };
   const notify = (uid, event) => {
     if (closed) return;
     for (const response of clients.get(uid) || []) {
@@ -428,98 +505,107 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
       destination: dirs.tmp,
       filename: (_req, _file, done) => done(null, randomUUID()),
     }),
-    limits: { fileSize: MAX_BYTES, files: 30, fields: 5, parts: 35 },
-  }).array('photos', 30);
+    // Multer 2.4's fileSize is inclusive; the locked dependency compensates for
+    // Busboy's boundary internally. insertImage also validates actual disk bytes.
+    limits: {
+      fileSize: UPLOAD_MAX_BYTES,
+      files: UPLOAD_BATCH_SIZE,
+      fields: 1,
+      fieldSize: 16,
+      parts: UPLOAD_BATCH_SIZE + 1,
+    },
+  }).array('photos', UPLOAD_BATCH_SIZE);
   const fileDigest = async (filename) => {
     const hash = createHash('sha256');
     for await (const chunk of createReadStream(filename)) hash.update(chunk);
     return hash.digest('hex');
   };
-  const insertImage = async (albumId, tempPath, rawName) => {
-    const metadata = await sharp(tempPath, {
-      limitInputPixels: MAX_PIXELS,
-      failOn: 'error',
-      animated: false,
-    }).metadata();
-    if (
-      !formats[metadata.format] ||
-      !metadata.width ||
-      !metadata.height ||
-      (metadata.pages || 1) > 1
-    )
-      throw problem(400, '仅支持静态 JPG、PNG、WebP 图片');
-    if (
-      metadata.width * metadata.height > MAX_PIXELS ||
-      Math.max(metadata.width, metadata.height) > 25000
-    )
-      throw problem(400, '图片尺寸过大，请控制在 8000 万像素以内');
-    const size = (await stat(tempPath)).size;
-    if (size > MAX_BYTES) throw problem(400, '单张照片不能超过 20MB');
-    const id = randomUUID();
-    const extension = metadata.format === 'jpeg' ? 'jpg' : metadata.format;
-    const paths = [
-      path.join(dirs.originals, `${id}.${extension}`),
-      path.join(dirs.previews, `${id}.webp`),
-      path.join(dirs.thumbs, `${id}.webp`),
-    ];
-    try {
-      const digest = await fileDigest(tempPath);
-      await sharp(tempPath, { limitInputPixels: MAX_PIXELS, failOn: 'error' })
-        .rotate()
-        .resize({ width: 3200, height: 3200, fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 90 })
-        .toFile(paths[1]);
-      await sharp(tempPath, { limitInputPixels: MAX_PIXELS, failOn: 'error' })
-        .rotate()
-        .resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 82 })
-        .toFile(paths[2]);
-      await rename(tempPath, paths[0]);
-      const swapped = [5, 6, 7, 8].includes(metadata.orientation);
-      const filename =
-        path
-          .basename(rawName.replaceAll('\\', '/'))
-          .replace(/[\u0000-\u001f\u007f]/g, '')
-          .slice(0, 255) || `photo.${extension}`;
-      db.prepare(
-        'INSERT INTO photos(id,album_id,filename,width,height,bytes,mime,extension,created_at,sha256) VALUES(?,?,?,?,?,?,?,?,?,?)',
-      ).run(
-        id,
-        albumId,
-        filename,
-        swapped ? metadata.height : metadata.width,
-        swapped ? metadata.width : metadata.height,
-        size,
-        formats[metadata.format],
-        extension,
-        timestamp(),
-        digest,
-      );
-      return db.prepare('SELECT * FROM photos WHERE id=?').get(id);
-    } catch (error) {
-      await Promise.all(paths.map((file) => rm(file, { force: true }).catch(() => {})));
-      throw error;
-    }
-  };
-  app.post('/api/albums/:id/photos', requireUser, (req, res, next) => {
-    try {
-      ownAlbum(req.params.id, req.user.id);
-    } catch (error) {
-      return next(error);
-    }
-    upload(req, res, (error) => {
-      if (error) {
-        // Multer removes partial disk files on failure; repeat defensively after malformed bodies.
-        Promise.all(
-          (req.files || []).map((file) => rm(file.path, { force: true }).catch(() => {})),
-        ).then(() => next(error));
-        return;
+  const insertImage = (albumId, tempPath, rawName, allowLargeFiles = false) =>
+    runImageTask(async () => {
+      const size = (await stat(tempPath)).size;
+      if (size > UPLOAD_MAX_BYTES) throw problem(400, '单张照片不能超过 30MB');
+      if (size > UPLOAD_CONFIRM_BYTES && !allowLargeFiles)
+        throw problem(400, '超过 20MB 的照片需要确认后才能上传');
+      const metadata = await sharp(tempPath, {
+        limitInputPixels: MAX_PIXELS,
+        failOn: 'error',
+        animated: false,
+      }).metadata();
+      if (
+        !formats[metadata.format] ||
+        !metadata.width ||
+        !metadata.height ||
+        (metadata.pages || 1) > 1
+      )
+        throw problem(400, '仅支持静态 JPG、PNG、WebP 图片');
+      if (
+        metadata.width * metadata.height > MAX_PIXELS ||
+        Math.max(metadata.width, metadata.height) > 25000
+      )
+        throw problem(400, '图片尺寸过大，请控制在 8000 万像素以内');
+      const id = randomUUID();
+      const extension = metadata.format === 'jpeg' ? 'jpg' : metadata.format;
+      const paths = [
+        path.join(dirs.originals, `${id}.${extension}`),
+        path.join(dirs.previews, `${id}.webp`),
+        path.join(dirs.thumbs, `${id}.webp`),
+      ];
+      try {
+        const digest = await fileDigest(tempPath);
+        await sharp(tempPath, { limitInputPixels: MAX_PIXELS, failOn: 'error' })
+          .rotate()
+          .resize({ width: 3200, height: 3200, fit: 'inside', withoutEnlargement: true })
+          .webp({ quality: 90 })
+          .toFile(paths[1]);
+        await sharp(tempPath, { limitInputPixels: MAX_PIXELS, failOn: 'error' })
+          .rotate()
+          .resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true })
+          .webp({ quality: 82 })
+          .toFile(paths[2]);
+        await rename(tempPath, paths[0]);
+        const swapped = [5, 6, 7, 8].includes(metadata.orientation);
+        const filename =
+          path
+            .basename(rawName.replaceAll('\\', '/'))
+            .replace(/[\u0000-\u001f\u007f]/g, '')
+            .slice(0, 255) || `photo.${extension}`;
+        db.prepare(
+          'INSERT INTO photos(id,album_id,filename,width,height,bytes,mime,extension,created_at,sha256) VALUES(?,?,?,?,?,?,?,?,?,?)',
+        ).run(
+          id,
+          albumId,
+          filename,
+          swapped ? metadata.height : metadata.width,
+          swapped ? metadata.width : metadata.height,
+          size,
+          formats[metadata.format],
+          extension,
+          timestamp(),
+          digest,
+        );
+        return db.prepare('SELECT * FROM photos WHERE id=?').get(id);
+      } catch (error) {
+        await Promise.all(paths.map((file) => rm(file, { force: true }).catch(() => {})));
+        throw error;
       }
-      (async () => {
-        const photos = [],
-          errors = [];
-        if (!req.files?.length) throw problem(400, '请选择需要上传的照片');
+    });
+  app.post(
+    '/api/albums/:id/photos',
+    requireUser,
+    limitMediaRequests,
+    asyncRoute((req, res) =>
+      trackMediaOperation(async () => {
+        ownAlbum(req.params.id, req.user.id);
         try {
+          await new Promise((resolve, reject) => {
+            upload(req, res, (error) => (error ? reject(error) : resolve()));
+          });
+          const photos = [],
+            errors = [];
+          if (!req.files?.length) throw problem(400, '请选择需要上传的照片');
+          // Inspect the completed multipart body, so fields work both before and
+          // after the files. Duplicate/array values and truthy alternatives fail.
+          const allowLargeFiles = req.body.allowLargeFiles === 'true';
           for (const file of req.files) {
             try {
               photos.push(
@@ -528,6 +614,7 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
                     req.params.id,
                     file.path,
                     Buffer.from(file.originalname, 'latin1').toString('utf8'),
+                    allowLargeFiles,
                   ),
                 ),
               );
@@ -535,27 +622,34 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
               errors.push({
                 filename: file.originalname,
                 error: error.status ? error.message : '图片无法读取，请确认格式正确且文件完整',
+                ...(error.status === 503 ? { retryable: true } : {}),
               });
             } finally {
               await rm(file.path, { force: true }).catch(() => {});
             }
           }
+          if (photos.length)
+            db.prepare(
+              "UPDATE albums SET analysis_status='idle' WHERE id=? AND analysis_status NOT IN ('queued','analyzing')",
+            ).run(req.params.id);
+          notify(req.user.id, { type: 'change', albumId: req.params.id });
+          res
+            .status(photos.length ? 201 : errors.some((error) => error.retryable) ? 503 : 400)
+            .json({
+              photos,
+              errors,
+              ...(photos.length ? {} : { error: errors[0]?.error || '没有可上传的有效照片' }),
+            });
         } finally {
+          // Normal format/consent errors preserve valid files. Multer size/count
+          // failures reject the whole multipart batch; its valid peers are cleaned.
           await Promise.all(
-            req.files.map((file) => rm(file.path, { force: true }).catch(() => {})),
+            (req.files || []).map((file) => rm(file.path, { force: true }).catch(() => {})),
           );
         }
-        if (photos.length)
-          db.prepare(
-            "UPDATE albums SET analysis_status='idle' WHERE id=? AND analysis_status NOT IN ('queued','analyzing')",
-          ).run(req.params.id);
-        notify(req.user.id, { type: 'change', albumId: req.params.id });
-        res
-          .status(photos.length ? 201 : 400)
-          .json({ photos, errors, ...(photos.length ? {} : { error: '没有可上传的有效照片' }) });
-      })().catch(next);
-    });
-  });
+      }),
+    ),
+  );
   app.patch('/api/photos/:id', requireUser, (req, res) => {
     const photo = ownPhoto(req.params.id, req.user.id);
     const input = req.body;
@@ -660,50 +754,52 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
   // 特征提取：64 位 dHash、颜色均值与拉普拉斯方差；完整特征可复用。
   const computeFeatures = async (photo) => {
     if (photo.analyzed && photo.phash && photo.color && photo.sharpness !== null) return photo;
-    const source = path.join(dirs.thumbs, `${photo.id}.webp`);
-    const gray = await sharp(source)
-      .resize(9, 8, { fit: 'fill' })
-      .removeAlpha()
-      .greyscale()
-      .raw()
-      .toBuffer();
-    let bits = 0n;
-    for (let y = 0; y < 8; y++)
-      for (let x = 0; x < 8; x++)
-        bits = (bits << 1n) | BigInt(gray[y * 9 + x] > gray[y * 9 + x + 1]);
-    const { data, info } = await sharp(source)
-      .resize(256, 256, { fit: 'inside', withoutEnlargement: true })
-      .removeAlpha()
-      .greyscale()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    let sum = 0,
-      squares = 0,
-      count = 0;
-    for (let y = 1; y < info.height - 1; y++)
-      for (let x = 1; x < info.width - 1; x++) {
-        const i = y * info.width + x;
-        const value =
-          4 * data[i] - data[i - 1] - data[i + 1] - data[i - info.width] - data[i + info.width];
-        sum += value;
-        squares += value * value;
-        count++;
-      }
-    const sharpness = count ? Math.max(0, squares / count - (sum / count) ** 2) : 0;
-    const stats = await sharp(source).removeAlpha().stats();
-    const color = JSON.stringify(stats.channels.slice(0, 3).map((channel) => channel.mean));
-    photo.phash = bits.toString(16).padStart(16, '0');
-    photo.color = color;
-    photo.sharpness = sharpness;
-    photo.analyzed = 1;
-    if (!closed)
-      db.prepare('UPDATE photos SET phash=?,color=?,sharpness=?,analyzed=1 WHERE id=?').run(
-        photo.phash,
-        color,
-        sharpness,
-        photo.id,
-      );
-    return photo;
+    return runImageTask(async () => {
+      const source = path.join(dirs.thumbs, `${photo.id}.webp`);
+      const gray = await sharp(source)
+        .resize(9, 8, { fit: 'fill' })
+        .removeAlpha()
+        .greyscale()
+        .raw()
+        .toBuffer();
+      let bits = 0n;
+      for (let y = 0; y < 8; y++)
+        for (let x = 0; x < 8; x++)
+          bits = (bits << 1n) | BigInt(gray[y * 9 + x] > gray[y * 9 + x + 1]);
+      const { data, info } = await sharp(source)
+        .resize(256, 256, { fit: 'inside', withoutEnlargement: true })
+        .removeAlpha()
+        .greyscale()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      let sum = 0,
+        squares = 0,
+        count = 0;
+      for (let y = 1; y < info.height - 1; y++)
+        for (let x = 1; x < info.width - 1; x++) {
+          const i = y * info.width + x;
+          const value =
+            4 * data[i] - data[i - 1] - data[i + 1] - data[i - info.width] - data[i + info.width];
+          sum += value;
+          squares += value * value;
+          count++;
+        }
+      const sharpness = count ? Math.max(0, squares / count - (sum / count) ** 2) : 0;
+      const stats = await sharp(source).removeAlpha().stats();
+      const color = JSON.stringify(stats.channels.slice(0, 3).map((channel) => channel.mean));
+      photo.phash = bits.toString(16).padStart(16, '0');
+      photo.color = color;
+      photo.sharpness = sharpness;
+      photo.analyzed = 1;
+      if (!closed)
+        db.prepare('UPDATE photos SET phash=?,color=?,sharpness=?,analyzed=1 WHERE id=?').run(
+          photo.phash,
+          color,
+          sharpness,
+          photo.id,
+        );
+      return photo;
+    });
   };
   let running = false;
   const queue = [];
@@ -830,6 +926,9 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
   app.post('/api/albums/:id/analyze', requireUser, (req, res) => {
     const album = ownAlbum(req.params.id, req.user.id);
     if (!['queued', 'analyzing'].includes(album.analysis_status)) {
+      // Leave one bounded slot for an active job's incremental follow-up pass.
+      if (closed) throw closingError();
+      if (queue.length >= ANALYSIS_WAIT_LIMIT - 1) throw busyError();
       db.prepare("UPDATE albums SET analysis_status='queued' WHERE id=?").run(album.id);
       queue.push({ albumId: album.id, userId: req.user.id });
       notify(req.user.id, { type: 'queued', albumId: album.id });
@@ -862,63 +961,69 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
   app.post(
     '/api/demo',
     requireUser,
-    asyncRoute(async (req, res) => {
-      if (!demoDir) throw problem(404, '尚未配置示例照片');
-      const existing = db
-        .prepare(
-          "SELECT * FROM albums WHERE user_id=? AND title IN ('京都 · 光影纪行','光影漫游 · 示例项目')",
-        )
-        .get(req.user.id);
-      if (existing) return res.json({ album: albumJSON(existing) });
-      const names = (await readdir(demoDir))
-        .filter((name) => /\.(jpe?g|png|webp)$/i.test(name))
-        .slice(0, 30);
-      if (!names.length) throw problem(404, '尚未配置示例照片');
-      const album = createAlbum(req.user.id, {
-        title: '京都 · 光影纪行',
-        description: '一组用于体验上传、选片、封面和作品发布流程的示例照片。',
-        location: '日本 · 京都',
-      });
-      for (const name of names) {
-        const source = path.join(demoDir, name);
-        const temp = path.join(dirs.tmp, randomUUID());
-        try {
-          await copyFile(source, temp);
-          const photo = await insertImage(album.id, temp, name);
-          if (/^kyoto-temple\./i.test(name))
-            db.prepare('UPDATE albums SET cover_photo_id=? WHERE id=?').run(photo.id, album.id);
-        } finally {
-          await rm(temp, { force: true }).catch(() => {});
+    limitMediaRequests,
+    asyncRoute((req, res) =>
+      trackMediaOperation(async () => {
+        if (!demoDir) throw problem(404, '尚未配置示例照片');
+        const existing = db
+          .prepare(
+            "SELECT * FROM albums WHERE user_id=? AND title IN ('京都 · 光影纪行','光影漫游 · 示例项目')",
+          )
+          .get(req.user.id);
+        if (existing) return res.json({ album: albumJSON(existing) });
+        const names = (await readdir(demoDir))
+          .filter((name) => /\.(jpe?g|png|webp)$/i.test(name))
+          .slice(0, 30);
+        if (!names.length) throw problem(404, '尚未配置示例照片');
+        const album = createAlbum(req.user.id, {
+          title: '京都 · 光影纪行',
+          description: '一组用于体验上传、选片、封面和作品发布流程的示例照片。',
+          location: '日本 · 京都',
+        });
+        for (const name of names) {
+          const source = path.join(demoDir, name);
+          const temp = path.join(dirs.tmp, randomUUID());
+          try {
+            await copyFile(source, temp);
+            const photo = await insertImage(album.id, temp, name, true);
+            if (/^kyoto-temple\./i.test(name))
+              db.prepare('UPDATE albums SET cover_photo_id=? WHERE id=?').run(photo.id, album.id);
+          } finally {
+            await rm(temp, { force: true }).catch(() => {});
+          }
         }
-      }
-      const street = names.find((name) => /rain/i.test(name)) || names[0];
-      const variants = [
-        { name: '雨中街角 · 完全重复示例.png', mode: 'duplicate' },
-        { name: '雨中街角 · 相似构图示例.jpg', mode: 'similar' },
-        { name: '雨中街角 · 疑似模糊示例.jpg', mode: 'blur' },
-      ];
-      for (const variant of variants) {
-        const temp = path.join(dirs.tmp, randomUUID());
-        try {
-          const source = path.join(demoDir, street);
-          if (variant.mode === 'duplicate') await copyFile(source, temp);
-          else if (variant.mode === 'similar')
-            await sharp(source)
-              .resize({ width: 1500, withoutEnlargement: true })
-              .modulate({ brightness: 1.035 })
-              .jpeg({ quality: 88 })
-              .toFile(temp);
-          else await sharp(source).blur(14).jpeg({ quality: 90 }).toFile(temp);
-          await insertImage(album.id, temp, variant.name);
-        } finally {
-          await rm(temp, { force: true }).catch(() => {});
+        const street = names.find((name) => /rain/i.test(name)) || names[0];
+        const variants = [
+          { name: '雨中街角 · 完全重复示例.png', mode: 'duplicate' },
+          { name: '雨中街角 · 相似构图示例.jpg', mode: 'similar' },
+          { name: '雨中街角 · 疑似模糊示例.jpg', mode: 'blur' },
+        ];
+        for (const variant of variants) {
+          const temp = path.join(dirs.tmp, randomUUID());
+          try {
+            const source = path.join(demoDir, street);
+            if (variant.mode === 'duplicate') await copyFile(source, temp);
+            else if (variant.mode === 'similar')
+              await runImageTask(() =>
+                sharp(source)
+                  .resize({ width: 1500, withoutEnlargement: true })
+                  .modulate({ brightness: 1.035 })
+                  .jpeg({ quality: 88 })
+                  .toFile(temp),
+              );
+            else
+              await runImageTask(() => sharp(source).blur(14).jpeg({ quality: 90 }).toFile(temp));
+            await insertImage(album.id, temp, variant.name, true);
+          } finally {
+            await rm(temp, { force: true }).catch(() => {});
+          }
         }
-      }
-      notify(req.user.id, { type: 'change', albumId: album.id });
-      res
-        .status(201)
-        .json({ album: albumJSON(db.prepare('SELECT * FROM albums WHERE id=?').get(album.id)) });
-    }),
+        notify(req.user.id, { type: 'change', albumId: album.id });
+        res
+          .status(201)
+          .json({ album: albumJSON(db.prepare('SELECT * FROM albums WHERE id=?').get(album.id)) });
+      }),
+    ),
   );
   app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在' }));
   app.use((error, _req, res, _next) => {
@@ -929,17 +1034,18 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
       status = 400;
       message =
         error.code === 'LIMIT_FILE_SIZE'
-          ? '单张照片不能超过 20MB，请分批上传'
-          : '每批最多上传 30 张照片，请检查上传字段';
+          ? '单张照片不能超过 30MB，请分批上传'
+          : `每批最多上传 ${UPLOAD_BATCH_SIZE} 张照片，请检查上传字段`;
     }
     if (error.type === 'entity.parse.failed') {
       status = 400;
       message = '请求内容格式不正确';
     }
-    if (status >= 500) {
+    if (status >= 500 && status !== 503) {
       console.error('API error:', error.message);
       message = '服务暂时无法完成操作，请稍后重试';
     }
+    if (status === 503) res.setHeader('Retry-After', '3');
     res.status(status).json({ error: message });
   });
   app.locals.publicAlbum = (slug) => {
@@ -964,12 +1070,17 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
   return {
     app,
     async close() {
-      closed = true;
-      queue.length = 0;
-      for (const set of clients.values()) for (const response of set) response.end();
-      clients.clear();
-      await activeAnalysis;
-      db.close();
+      if (!closing)
+        closing = (async () => {
+          closed = true;
+          queue.length = 0;
+          for (const job of imageJobs.splice(0)) job.reject(closingError());
+          for (const set of clients.values()) for (const response of set) response.end();
+          clients.clear();
+          await Promise.allSettled([activeAnalysis, ...mediaOperations, waitForImageIdle()]);
+          db.close();
+        })();
+      return closing;
     },
   };
 }

@@ -17,6 +17,7 @@ import {
   FolderPlus,
   Globe,
   Grid2X2,
+  Heart,
   ImagePlus,
   Images,
   LoaderCircle,
@@ -36,9 +37,17 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import type { Album, Photo, PhotoPatch, User } from '../shared/types';
+import type { Album, Photo, PhotoPatch, PublicPhoto, User } from '../shared/types';
 import { api, formatDate } from './api';
-import AuthView from './components/AuthView';
+import AuthDialog from './components/AuthDialog';
+import PublishDialog from './components/PublishDialog';
+import {
+  downloadPhoto,
+  normalizeReturnPath,
+  publicAlbumToAlbum,
+  publicPhotoToPhoto,
+  type PendingIntent,
+} from './interactionFlow';
 import Modal from './components/Modal';
 import CoverDialog from './components/CoverDialog';
 import PhotoPreview from './components/PhotoPreview';
@@ -73,21 +82,24 @@ const filters: { id: Filter; label: string }[] = [
   { id: 'keep', label: '已选作品' },
 ];
 const emptyStats = { duplicates: 0, similarGroups: 0, blurry: 0, kept: 0 };
+const emptyPhotos: Photo[] = [];
 
 // 轻量路由：只管理路径；相册选择与筛选仍由 App 的临时状态保存。
 function useRoute() {
-  const [path, setPath] = useState(window.location.pathname);
+  const [route, setRoute] = useState(window.location.pathname + window.location.search);
   useEffect(() => {
-    const change = () => setPath(window.location.pathname);
+    const change = () => setRoute(window.location.pathname + window.location.search);
     window.addEventListener('popstate', change);
     return () => window.removeEventListener('popstate', change);
   }, []);
-  const navigate = useCallback((next: string) => {
-    window.history.pushState(null, '', next);
-    setPath(next);
-    window.scrollTo({ top: 0 });
+  const navigate = useCallback((next: string, replace = false) => {
+    const target = normalizeReturnPath(next, window.location.origin);
+    const changed = new URL(target, window.location.origin).pathname !== window.location.pathname;
+    window.history[replace ? 'replaceState' : 'pushState'](null, '', target);
+    setRoute(target);
+    if (changed) window.scrollTo({ top: 0 });
   }, []);
-  return { path, navigate };
+  return { path: new URL(route, window.location.origin).pathname, route, navigate };
 }
 
 // 照片网格卡片：只负责展示与事件回调，不直接访问后端。
@@ -99,6 +111,7 @@ function PhotoCard({
   onOpen,
   onSelect,
   onPick,
+  onFavorite,
 }: {
   photo: Photo;
   selected: boolean;
@@ -107,6 +120,7 @@ function PhotoCard({
   onOpen: () => void;
   onSelect: () => void;
   onPick: () => void;
+  onFavorite?: () => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [photo.thumbnailUrl]);
@@ -170,7 +184,11 @@ function PhotoCard({
           <button className="filename" onClick={onOpen} title={photo.filename}>
             {photo.filename}
           </button>
-          <time>{formatDate(photo.capturedAt || photo.createdAt)}</time>
+          <time>
+            {readOnly
+              ? photo.authorName || '摄影创作者'
+              : formatDate(photo.capturedAt || photo.createdAt)}
+          </time>
         </div>
         {!readOnly ? (
           <button
@@ -182,11 +200,15 @@ function PhotoCard({
             <Star size={15} fill={photo.pick === 'keep' ? 'currentColor' : 'none'} />
           </button>
         ) : (
-          <span className="photo-resolution">
-            {photo.width}
-            {' × '}
-            {photo.height}
-          </span>
+          <button
+            className={`pick-button ${photo.isFavorite ? 'is-kept' : ''}`}
+            onClick={onFavorite}
+            aria-label={photo.isFavorite ? '取消收藏' : '收藏作品'}
+            aria-pressed={!!photo.isFavorite}
+            title={photo.isFavorite ? '已收藏' : '收藏作品'}
+          >
+            <Heart size={18} fill={photo.isFavorite ? 'currentColor' : 'none'} />
+          </button>
         )}
       </div>
     </article>
@@ -203,6 +225,13 @@ function CreateAlbum({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
@@ -211,11 +240,11 @@ function CreateAlbum({
         method: 'POST',
         body: JSON.stringify(Object.fromEntries(new FormData(e.currentTarget))),
       });
-      onCreate(album);
+      if (alive.current) onCreate(album);
     } catch (err) {
-      setError((err as Error).message);
+      if (alive.current) setError((err as Error).message);
     } finally {
-      setBusy(false);
+      if (alive.current) setBusy(false);
     }
   }
   return (
@@ -266,7 +295,7 @@ function CreateAlbum({
 }
 
 export default function App() {
-  const { path, navigate } = useRoute();
+  const { path, route, navigate } = useRoute();
   let publicSlug: string | null = null;
   if (path.startsWith('/p/')) {
     try {
@@ -275,16 +304,31 @@ export default function App() {
       publicSlug = path.slice(3);
     }
   }
-  const publicView = path === '/explore' || !!publicSlug;
   // 状态区：用户与数据、视图选择、弹窗、轮播及异步反馈。
   const [user, setUser] = useState<User | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [albums, setAlbums] = useState<Album[]>([]);
   const [albumId, setAlbumId] = useState('');
-  const [album, setAlbum] = useState<Album | null>(null);
-  const [photos, setPhotos] = useState<Photo[]>([]);
-  const [publicAlbums, setPublicAlbums] = useState<Album[]>([]);
+  const [albumData, setAlbum] = useState<Album | null>(null);
+  const [loadedPath, setLoadedPath] = useState('');
+  const [loadedScope, setLoadedScope] = useState('');
+  const [photoData, setPhotos] = useState<Photo[]>([]);
+  const favoritesView = path === '/favorites' && !!user;
+  const galleryView = path === '/' || path === '/explore' || (!user && !publicSlug);
+  const feedView = galleryView || favoritesView;
+  const publicView = feedView || !!publicSlug;
+  const [galleryPhotos, setGalleryPhotos] = useState<Photo[]>([]);
+  const [gallerySort, setGallerySort] = useState<'featured' | 'latest'>('featured');
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [unavailableFavorites, setUnavailableFavorites] = useState(0);
+  const [authIntent, setAuthIntent] = useState<PendingIntent | null>(null);
+  const [resumeIntent, setResumeIntent] = useState<PendingIntent | null>(null);
+  const [uploadGuide, setUploadGuide] = useState(false);
   const [tab, setTab] = useState<Tab>('projects');
+  const contextKey = `${publicSlug ? 'public' : user?.id || 'guest'}:${path}:${publicSlug || (tab === 'trash' ? 'trash' : albumId)}`;
+  const album = loadedScope === contextKey ? albumData : null;
+  const photos = loadedScope === contextKey ? photoData : emptyPhotos;
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [refresh, setRefresh] = useState(0);
@@ -317,11 +361,17 @@ export default function App() {
   const dragDepth = useRef(0);
   const uploadJobRef = useRef<UploadJob | null>(null);
   const uploadSequence = useRef(0);
+  const favoriteRequests = useRef(new Set<string>());
+  const authEpoch = useRef(0);
+  const feedRequestVersion = useRef(0);
+  const feedContext = useRef('');
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const activeAlbumRef = useRef(albumId);
   activeAlbumRef.current = albumId;
   const routeRef = useRef(path);
   routeRef.current = path;
+  const currentScopeRef = useRef(contextKey);
+  currentScopeRef.current = contextKey;
   const uploadUserRef = useRef(user?.id);
   uploadUserRef.current = user?.id;
   const uploadTabRef = useRef(tab);
@@ -391,11 +441,27 @@ export default function App() {
   );
   // 数据同步：恢复会话，再根据用户、相册与公开路由读取对应数据。
   useEffect(() => {
-    api<{ user: User | null }>('/auth/session')
-      .then((data) => setUser(data.user))
-      .catch(() => setLoadError('无法连接本地服务，请确认后端正在运行。'))
-      .finally(() => setSessionLoading(false));
-    return () => clearTimeout(toastTimer.current);
+    const controller = new AbortController();
+    const epoch = authEpoch.current;
+    api<{ user: User | null }>('/auth/session', { signal: controller.signal })
+      .then((data) => {
+        if (!controller.signal.aborted && authEpoch.current === epoch) setUser(data.user);
+      })
+      .catch((error) => {
+        if (
+          !controller.signal.aborted &&
+          authEpoch.current === epoch &&
+          error.name !== 'AbortError'
+        )
+          setLoadError('暂时无法连接相册服务，请稍后重试。');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && authEpoch.current === epoch) setSessionLoading(false);
+      });
+    return () => {
+      controller.abort();
+      clearTimeout(toastTimer.current);
+    };
   }, []);
   useEffect(() => {
     if (!user || publicView) return;
@@ -431,8 +497,15 @@ export default function App() {
         : '/albums/' + albumId;
     api<{ album?: Album; photos: Photo[] }>(url, { signal: controller.signal })
       .then((data) => {
-        setAlbum(data.album || null);
-        setPhotos(data.photos);
+        if (controller.signal.aborted) return;
+        setLoadedPath(path);
+        setLoadedScope(contextKey);
+        setAlbum(data.album ? (publicSlug ? publicAlbumToAlbum(data.album) : data.album) : null);
+        setPhotos(
+          publicSlug
+            ? data.photos.map((photo) => publicPhotoToPhoto(photo as unknown as PublicPhoto))
+            : data.photos,
+        );
       })
       .catch((e) => {
         if (e.name !== 'AbortError') {
@@ -447,20 +520,81 @@ export default function App() {
     return () => controller.abort();
   }, [user, albumId, refresh, publicView, publicSlug, tab]);
   useEffect(() => {
-    if (path !== '/explore') return;
+    if (!feedView || (favoritesView && !user)) return;
     const controller = new AbortController();
+    const version = ++feedRequestVersion.current;
     setLoading(true);
+    setLoadingMore(false);
     setLoadError('');
-    api<{ albums: Album[] }>('/public/albums', { signal: controller.signal })
-      .then((data) => setPublicAlbums(data.albums))
-      .catch((e) => {
-        if (e.name !== 'AbortError') setLoadError(e.message);
+    const context = `${path}:${gallerySort}:${search}`;
+    if (feedContext.current !== context) setGalleryPhotos([]);
+    feedContext.current = context;
+    setNextCursor(null);
+    const timer = setTimeout(
+      () => {
+        const query = new URLSearchParams({ sort: gallerySort, q: search, limit: '48' });
+        const url = favoritesView ? '/favorites' : '/public/photos?' + query;
+        api<{ photos: PublicPhoto[]; nextCursor?: string | null; unavailableCount?: number }>(url, {
+          signal: controller.signal,
+        })
+          .then((data) => {
+            if (controller.signal.aborted || feedRequestVersion.current !== version) return;
+            setGalleryPhotos(data.photos.map(publicPhotoToPhoto));
+            setNextCursor(data.nextCursor || null);
+            setUnavailableFavorites(data.unavailableCount || 0);
+          })
+          .catch((e) => {
+            if (e.name !== 'AbortError') setLoadError(e.message);
+          })
+          .finally(() => {
+            if (!controller.signal.aborted) setLoading(false);
+          });
+      },
+      search ? 250 : 0,
+    );
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [feedView, favoritesView, path, user?.id, refresh, gallerySort, search]);
+  // A photo deep link opens only after its authorized public data is available.
+  useEffect(() => {
+    if (!publicView || loading) return;
+    const id = new URLSearchParams(route.split('?')[1] || '').get('photo');
+    const source = feedView ? galleryPhotos : loadedPath === path ? photos : [];
+    if (id && source.some((photo) => photo.id === id)) setPreviewId(id);
+    else if (id && galleryView) {
+      const controller = new AbortController();
+      api<{ photo: PublicPhoto }>('/public/photos/' + encodeURIComponent(id), {
+        signal: controller.signal,
       })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [path, refresh]);
+        .then(({ photo }) => {
+          if (controller.signal.aborted) return;
+          setGalleryPhotos((current) =>
+            current.some((item) => item.id === photo.id)
+              ? current
+              : [publicPhotoToPhoto(photo), ...current],
+          );
+          setPreviewId(photo.id);
+        })
+        .catch((error) => {
+          if (!controller.signal.aborted && error.name !== 'AbortError')
+            tell('这张作品已撤回或暂不可用，可继续浏览其他作品');
+        });
+      return () => controller.abort();
+    }
+  }, [
+    route,
+    galleryPhotos,
+    photos,
+    feedView,
+    galleryView,
+    publicView,
+    loading,
+    loadedPath,
+    path,
+    tell,
+  ]);
   useEffect(() => {
     setSelected(new Set());
     setSelecting(false);
@@ -472,6 +606,8 @@ export default function App() {
     setFilter(tab === 'smart' ? 'similar' : 'all');
     setPaused(false);
     setAnalyzing(false);
+    setCreateOpen(false);
+    setWorking(false);
   }, [albumId, tab, path]);
   useEffect(() => {
     if (!user) return;
@@ -555,9 +691,16 @@ export default function App() {
   };
   // 网格视图：本地筛选、文件名搜索与排序；不会修改数据库中的原始照片。
   const visiblePhotos = useMemo(() => {
-    const result = photos.filter((p) => {
+    const result = (feedView ? galleryPhotos : photos).filter((p) => {
       if (tab !== 'trash' && p.deletedAt) return false;
-      if (search && !p.filename.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+      if (
+        search &&
+        (!galleryView || favoritesView) &&
+        ![p.filename, p.authorName || '', p.albumTitle || '']
+          .join(' ')
+          .toLocaleLowerCase()
+          .includes(search.toLocaleLowerCase())
+      )
         return false;
       if (publicView || tab === 'trash') return true;
       return (
@@ -568,6 +711,7 @@ export default function App() {
         (filter === 'keep' && p.pick === 'keep')
       );
     });
+    if (feedView) return result;
     return result.sort((a, b) =>
       filter === 'similar' && a.groupId !== b.groupId
         ? (a.groupId || '').localeCompare(b.groupId || '')
@@ -577,18 +721,36 @@ export default function App() {
             ? b.rating - a.rating
             : (b.capturedAt || b.createdAt).localeCompare(a.capturedAt || a.createdAt),
     );
-  }, [photos, filter, search, sort, tab, publicView, duplicateOriginals]);
+  }, [
+    photos,
+    galleryPhotos,
+    feedView,
+    galleryView,
+    favoritesView,
+    filter,
+    search,
+    sort,
+    tab,
+    publicView,
+    duplicateOriginals,
+  ]);
   const resetTab = (next: Tab) => {
-    navigate('/');
+    if (!user) {
+      requestLogin('workspace', undefined, next);
+      return;
+    }
+    navigate('/library');
     setTab(next);
     setFilter(next === 'smart' ? 'similar' : 'all');
   };
   // 业务操作：先由服务端校验和保存，再刷新前端数据。
   async function patchPhoto(id: string, patch: PhotoPatch) {
+    const scope = contextKey;
     const data = await api<{ photo: Photo }>('/photos/' + id, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     });
+    if (currentScopeRef.current !== scope) return;
     setPhotos((current) => current.map((p) => (p.id === id ? data.photo : p)));
     if (patch.restore) setPhotos((current) => current.filter((p) => p.id !== id));
     reload();
@@ -784,64 +946,265 @@ export default function App() {
       return;
     }
     uploadJobRef.current = job;
+    setUploadGuide(false);
     setUploadLocked(true);
     if (selection.large.length) setPendingUpload(job);
     else void runUpload(job, false);
   }
   async function importDemo() {
+    const epoch = authEpoch.current;
+    const requestedPath = path;
     setWorking(true);
     try {
       const { album: result } = await api<{ album: Album }>('/demo', { method: 'POST' });
+      if (authEpoch.current !== epoch || routeRef.current !== requestedPath) return;
       setAlbumId(result.id);
       setTab('projects');
       reload();
       tell('示例项目已加入你的空间，可自由体验选片');
       await analyze(result.id);
     } catch (e) {
-      tell((e as Error).message);
+      if (authEpoch.current === epoch && routeRef.current === requestedPath)
+        tell((e as Error).message);
     } finally {
-      setWorking(false);
+      if (authEpoch.current === epoch && routeRef.current === requestedPath) setWorking(false);
     }
   }
   async function bulk(patch: PhotoPatch) {
+    const scope = contextKey;
     setWorking(true);
     try {
-      for (const id of selected)
+      for (const id of selected) {
+        if (currentScopeRef.current !== scope) return;
         await api('/photos/' + id, { method: 'PATCH', body: JSON.stringify(patch) });
+      }
+      if (currentScopeRef.current !== scope) return;
       setSelected(new Set());
       setSelecting(false);
       setDeleteOpen(false);
       reload();
       tell(patch.deleted ? '已移入回收站，可随时恢复' : '已更新选片标记');
     } catch (e) {
-      reload();
-      tell((e as Error).message);
+      if (currentScopeRef.current === scope) {
+        reload();
+        tell((e as Error).message);
+      }
     } finally {
-      setWorking(false);
+      if (currentScopeRef.current === scope) setWorking(false);
     }
   }
-  async function publish(value: boolean) {
-    setWorking(true);
-    try {
-      await patchAlbum({ isPublic: value });
-      setPublishOpen(false);
-      tell(value ? '作品集已发布，可复制链接分享' : '已撤回公开作品集');
-    } catch (e) {
-      tell((e as Error).message);
-    } finally {
-      setWorking(false);
-    }
-  }
-  async function copyLink() {
+  async function savePublication(settings: {
+    photoIds: string[];
+    allowDownload: boolean;
+    title: string;
+    featuredPhotoIds: string[];
+  }) {
     if (!album) return;
-    const link = `${window.location.origin}/p/${album.slug}`;
-    try {
-      await navigator.clipboard.writeText(link);
-      tell('作品链接已复制');
-    } catch {
-      tell(`作品地址：${link}`);
+    const target = album.id;
+    const scope = contextKey;
+    const ownerId = user?.id;
+    const data = await api<{ album: Album }>(
+      '/albums/' + encodeURIComponent(target) + '/publication',
+      {
+        method: 'PUT',
+        body: JSON.stringify(settings),
+      },
+    );
+    if (uploadUserRef.current !== ownerId) return;
+    setAlbums((current) => current.map((item) => (item.id === target ? data.album : item)));
+    if (currentScopeRef.current !== scope) {
+      reload();
+      return;
+    }
+    setAlbum(data.album);
+    setPublishOpen(false);
+    setSelected(new Set());
+    setSelecting(false);
+    reload();
+    tell(
+      settings.photoIds.length
+        ? `已发布 ${settings.photoIds.length} 张精选照片，其余照片继续私密`
+        : '已撤回公开，照片仍保留在你的相册中',
+    );
+  }
+  function requestLogin(
+    kind: PendingIntent['kind'],
+    photo?: Photo,
+    workspaceTab?: PendingIntent['workspaceTab'],
+  ) {
+    setAuthIntent({
+      kind,
+      path: route,
+      photoId: photo?.id || previewId || undefined,
+      scrollY: window.scrollY,
+      workspaceTab,
+    });
+  }
+  function openPhoto(photo: Photo) {
+    setPreviewId(photo.id);
+    if (publicView) navigate(path + '?photo=' + encodeURIComponent(photo.id), true);
+  }
+  function closePreview() {
+    setPreviewId(null);
+    if (publicView) navigate(path, true);
+  }
+  function requestUpload() {
+    if (!user) {
+      requestLogin('upload');
+      return;
+    }
+    if (!publicView && albumId && tab !== 'trash') fileInput.current?.click();
+    else {
+      setUploadGuide(true);
+      setTab('projects');
+      navigate('/library');
     }
   }
+  async function favoritePhoto(photo: Photo) {
+    if (!user) {
+      requestLogin('favorite', photo);
+      return;
+    }
+    const ownerId = user.id;
+    const scope = contextKey;
+    const feed = feedContext.current;
+    if (favoriteRequests.current.has(photo.id)) return;
+    favoriteRequests.current.add(photo.id);
+    try {
+      const next = !photo.isFavorite;
+      await api('/photos/' + encodeURIComponent(photo.id) + '/favorite', {
+        method: 'PUT',
+        body: JSON.stringify({ favorite: next }),
+      });
+      if (uploadUserRef.current !== ownerId) return;
+      if (currentScopeRef.current !== scope || feedContext.current !== feed) {
+        reload();
+        return;
+      }
+      const update = (items: Photo[]) =>
+        items.map((item) => (item.id === photo.id ? { ...item, isFavorite: next } : item));
+      setGalleryPhotos((current) =>
+        favoritesView && !next ? current.filter((item) => item.id !== photo.id) : update(current),
+      );
+      setPhotos(update);
+      if (favoritesView && !next && visiblePhotos.length <= 1) closePreview();
+      tell(next ? '已加入我的收藏' : '已取消收藏');
+      reload();
+    } catch (error) {
+      if (currentScopeRef.current === scope) tell((error as Error).message);
+    } finally {
+      favoriteRequests.current.delete(photo.id);
+    }
+  }
+  async function requestDownload(photo: Photo) {
+    if (publicView && !photo.allowDownload && photo.authorId !== user?.id) {
+      tell('作者暂未开放展示图下载');
+      return;
+    }
+    if (!user) {
+      requestLogin('download', photo);
+      return;
+    }
+    try {
+      await downloadPhoto(photo.id);
+      tell('下载已准备好');
+    } catch (error) {
+      tell((error as Error).message);
+    }
+  }
+  async function loadMorePhotos() {
+    if (!nextCursor || loadingMore || !galleryView) return;
+    const version = feedRequestVersion.current;
+    setLoadingMore(true);
+    try {
+      const query = new URLSearchParams({
+        sort: gallerySort,
+        q: search,
+        limit: '48',
+        cursor: nextCursor,
+      });
+      const data = await api<{ photos: PublicPhoto[]; nextCursor: string | null }>(
+        '/public/photos?' + query,
+      );
+      if (feedRequestVersion.current !== version) return;
+      setGalleryPhotos((current) => {
+        const ids = new Set(current.map((photo) => photo.id));
+        return [
+          ...current,
+          ...data.photos.filter((photo) => !ids.has(photo.id)).map(publicPhotoToPhoto),
+        ];
+      });
+      setNextCursor(data.nextCursor);
+    } catch (error) {
+      if (feedRequestVersion.current === version) setLoadError((error as Error).message);
+    } finally {
+      if (feedRequestVersion.current === version) setLoadingMore(false);
+    }
+  }
+  // The intent stays in memory, contains no files or credentials, and is consumed once.
+  useEffect(() => {
+    if (!resumeIntent || !user) return;
+    const intent = resumeIntent;
+    setResumeIntent(null);
+    if (intent.kind === 'upload') {
+      setUploadGuide(true);
+      setTab('projects');
+      navigate('/library');
+    } else if (intent.kind === 'workspace') {
+      if (intent.workspaceTab === 'favorites') navigate('/favorites');
+      else {
+        setTab(intent.workspaceTab || 'projects');
+        navigate('/library');
+      }
+    } else {
+      const target = normalizeReturnPath(intent.path, window.location.origin);
+      if (target !== route) navigate(target, true);
+      if (intent.photoId && new URL(target, window.location.origin).searchParams.has('photo'))
+        setPreviewId(intent.photoId);
+      requestAnimationFrame(() => window.scrollTo({ top: intent.scrollY }));
+      if (intent.kind === 'download' && intent.photoId) {
+        void downloadPhoto(intent.photoId)
+          .then(() => tell('下载已准备好'))
+          .catch((e) => tell(e.message));
+      } else if (intent.kind === 'favorite' && intent.photoId) {
+        const id = intent.photoId;
+        const ownerId = user.id;
+        void api('/photos/' + encodeURIComponent(id) + '/favorite', {
+          method: 'PUT',
+          body: JSON.stringify({ favorite: true }),
+        })
+          .then(() => {
+            if (uploadUserRef.current !== ownerId) return;
+            setGalleryPhotos((items) =>
+              items.map((photo) => (photo.id === id ? { ...photo, isFavorite: true } : photo)),
+            );
+            setPhotos((items) =>
+              items.map((photo) => (photo.id === id ? { ...photo, isFavorite: true } : photo)),
+            );
+            tell('已加入我的收藏');
+            reload();
+          })
+          .catch((e) => tell(e.message));
+      }
+    }
+  }, [resumeIntent, user, navigate, route, tell]);
+  useEffect(() => {
+    if (sessionLoading || user || (path !== '/library' && path !== '/favorites')) return;
+    setAuthIntent(
+      (current) =>
+        current || {
+          kind: 'workspace',
+          path: '/',
+          scrollY: 0,
+          workspaceTab: path === '/favorites' ? 'favorites' : 'projects',
+        },
+    );
+    navigate('/', true);
+  }, [sessionLoading, user, path, navigate]);
+  useEffect(() => {
+    if (authIntent && new URL(authIntent.path, window.location.origin).pathname !== path)
+      setAuthIntent(null);
+  }, [path, authIntent]);
   const selectPhoto = (id: string) => {
     setSelecting(true);
     setSelected((current) => {
@@ -852,25 +1215,12 @@ export default function App() {
   };
 
   // 页面组合：认证页、公开作品、私密工作台，以及各类独立弹窗。
-  if (sessionLoading)
+  if (sessionLoading && !publicView)
     return (
       <div className="startup">
         <Aperture className="spin-slow" size={45} />
         <span>正在打开你的创作空间</span>
       </div>
-    );
-  if (!user && !publicView)
-    return (
-      <>
-        <AuthView
-          onLogin={(value) => {
-            setUser(value);
-            setLoadError('');
-          }}
-          onExplore={() => navigate('/explore')}
-        />
-        {loadError && <div className="connection-error">{loadError}</div>}
-      </>
     );
   return (
     <div
@@ -898,7 +1248,10 @@ export default function App() {
           e.preventDefault();
           dragDepth.current = 0;
           setDragging(false);
-          upload(e.dataTransfer.files);
+          if (!user || publicView) {
+            requestUpload();
+            tell('进入自己的相册后，请重新选择要上传的照片');
+          } else upload(e.dataTransfer.files);
         }
       }}
     >
@@ -919,10 +1272,16 @@ export default function App() {
         </button>
         <nav className="main-nav" aria-label="主导航">
           <button
+            className={publicView && !favoritesView ? 'active public-nav' : 'public-nav'}
+            onClick={() => navigate('/')}
+          >
+            公共图库
+          </button>
+          <button
             className={!publicView && tab === 'projects' ? 'active' : ''}
             onClick={() => resetTab('projects')}
           >
-            拍摄项目
+            我的相册
           </button>
           <button
             className={!publicView && tab === 'smart' ? 'active' : ''}
@@ -930,8 +1289,13 @@ export default function App() {
           >
             智能选片
           </button>
-          <button className={publicView ? 'active' : ''} onClick={() => navigate('/explore')}>
-            公开作品
+          <button
+            className={favoritesView ? 'active' : ''}
+            onClick={() =>
+              user ? navigate('/favorites') : requestLogin('workspace', undefined, 'favorites')
+            }
+          >
+            我的收藏
           </button>
           {user && (
             <button
@@ -947,11 +1311,7 @@ export default function App() {
             <>
               <button
                 className="button button-primary upload-header"
-                onClick={() =>
-                  albumId && !publicView && tab !== 'trash'
-                    ? fileInput.current?.click()
-                    : setCreateOpen(true)
-                }
+                onClick={requestUpload}
                 disabled={uploadLocked}
               >
                 <Upload size={16} />
@@ -968,12 +1328,20 @@ export default function App() {
                   cancelUpload('已取消本次上传');
                   try {
                     await api('/auth/logout', { method: 'POST' });
+                    authEpoch.current++;
+                    setSessionLoading(false);
                     setUploadErrorsByAlbum({});
                     setUser(null);
                     setAlbums([]);
                     setAlbumId('');
                     setPhotos([]);
                     setAlbum(null);
+                    setGalleryPhotos([]);
+                    setAuthIntent(null);
+                    setResumeIntent(null);
+                    setPreviewId(null);
+                    setCreateOpen(false);
+                    setWorking(false);
                     navigate('/');
                   } catch (e) {
                     tell((e as Error).message);
@@ -984,10 +1352,15 @@ export default function App() {
               </button>
             </>
           ) : (
-            <button className="button button-primary" onClick={() => navigate('/')}>
-              登录创作空间
-              <ArrowUpRight size={16} />
-            </button>
+            <>
+              <button className="button button-secondary upload-header" onClick={requestUpload}>
+                <Upload size={18} />
+                <span>上传照片</span>
+              </button>
+              <button className="button button-primary" onClick={() => requestLogin('login')}>
+                登录 / 注册
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -1002,59 +1375,171 @@ export default function App() {
           e.target.value = '';
         }}
       />
-      {path === '/explore' ? (
-        <main className="explore-page">
-          <div className="section-intro">
-            <p className="eyebrow">THROUGH DIFFERENT EYES</p>
-            <h1>在光影里，看见世界。</h1>
-            <p className="muted">每一次按下快门，都是一个值得分享的视角。</p>
+      {feedView ? (
+        <main className="explore-page public-gallery">
+          <section
+            className="project-hero gallery-hero"
+            aria-label={favoritesView ? '我的收藏' : '公共图库'}
+          >
+            {galleryPhotos[0] && (
+              <img src={galleryPhotos[0].previewUrl} className="hero-photo" alt="" />
+            )}
+            <div className="hero-shade" />
+            <div className="hero-content">
+              <h1>{favoritesView ? '我的收藏' : '公共图库'}</h1>
+              <p className="hero-description">
+                {favoritesView
+                  ? '把喜欢的作品留在这里，随时回来寻找灵感。'
+                  : '先看见喜欢的作品，再开始自己的创作。'}
+              </p>
+            </div>
+            <span className="gallery-visitor">
+              <Globe size={17} />
+              {user ? '发现摄影作品' : '游客浏览'}
+            </span>
+          </section>
+          <div className="gallery-toolbar">
+            <div className="gallery-tabs" role="group" aria-label="图库内容">
+              {favoritesView ? (
+                <span className="gallery-tab-label">
+                  <Heart size={18} />
+                  已收藏作品
+                </span>
+              ) : (
+                <>
+                  <button
+                    className={gallerySort === 'featured' ? 'active' : ''}
+                    aria-pressed={gallerySort === 'featured'}
+                    onClick={() => setGallerySort('featured')}
+                  >
+                    精选作品
+                  </button>
+                  <button
+                    className={gallerySort === 'latest' ? 'active' : ''}
+                    aria-pressed={gallerySort === 'latest'}
+                    onClick={() => setGallerySort('latest')}
+                  >
+                    最新发布
+                  </button>
+                </>
+              )}
+            </div>
+            <div className="search-field gallery-search">
+              <Search size={19} />
+              <input
+                aria-label="搜索作品、相册或作者"
+                placeholder="搜索作品、相册或作者"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              {search && (
+                <button className="icon-button" aria-label="清空搜索" onClick={() => setSearch('')}>
+                  <X size={17} />
+                </button>
+              )}
+            </div>
           </div>
-          {loading ? (
+          {unavailableFavorites > 0 && favoritesView && (
+            <p className="gallery-notice" role="status">
+              {unavailableFavorites} 张收藏作品已被作者撤回或暂不可用，其他收藏仍可浏览。
+            </p>
+          )}
+          {loadError && (
+            <div className="load-error" role="alert">
+              <p>{loadError}</p>
+              <button className="button button-secondary" onClick={reload}>
+                <RefreshCw size={18} />
+                重试加载
+              </button>
+            </div>
+          )}
+          {loading && !galleryPhotos.length ? (
             <Loading />
-          ) : publicAlbums.length ? (
-            <div className="portfolio-grid">
-              {publicAlbums.map((a) => (
-                <a
-                  key={a.id}
-                  href={`/p/${a.slug}`}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    navigate(`/p/${a.slug}`);
-                  }}
-                  className="portfolio-card"
-                >
-                  {a.coverUrl ? (
-                    <img src={a.coverUrl} alt={a.title} />
-                  ) : (
-                    <div className="portfolio-placeholder">
-                      <Aperture size={45} />
-                    </div>
-                  )}
-                  <div>
-                    <span className="eyebrow">PHOTOGRAPHIC JOURNAL</span>
-                    <h2>{a.title}</h2>
-                    <p>
-                      {a.location || '光影作品集'}
-                      <span>
-                        {a.photoCount}
-                        {' 张作品'}
-                        <ArrowUpRight size={17} />
-                      </span>
-                    </p>
-                  </div>
-                </a>
+          ) : visiblePhotos.length ? (
+            <div className="photo-grid public-photo-grid">
+              {visiblePhotos.map((photo) => (
+                <PhotoCard
+                  key={photo.id}
+                  photo={photo}
+                  selected={false}
+                  selecting={false}
+                  readOnly
+                  onOpen={() => openPhoto(photo)}
+                  onSelect={() => {}}
+                  onPick={() => {}}
+                  onFavorite={() => void favoritePhoto(photo)}
+                />
               ))}
             </div>
-          ) : (
+          ) : !loadError && !loading ? (
             <Empty
-              icon={Globe}
-              title="好作品，值得被看见"
-              text="这里会展示创作者主动发布的作品集。私密项目始终由作者自己掌握。"
-            />
+              icon={favoritesView ? Heart : Globe}
+              title={
+                search
+                  ? '没有找到相关作品'
+                  : favoritesView
+                    ? '把喜欢的作品收藏在这里'
+                    : '好作品，值得被看见'
+              }
+              text={
+                search
+                  ? '试试其他作品名、相册名或作者名称。'
+                  : favoritesView
+                    ? '在公共图库点击收藏，下次就能在这里找到。'
+                    : '作者主动发布后，作品会出现在这里；私人相册不会公开。'
+              }
+            >
+              {favoritesView ? (
+                <button className="button button-secondary" onClick={() => navigate('/')}>
+                  去公共图库看看
+                </button>
+              ) : !search ? (
+                <button className="button button-secondary" onClick={requestUpload}>
+                  上传自己的作品
+                </button>
+              ) : null}
+            </Empty>
+          ) : null}
+          {galleryView && nextCursor && (
+            <div className="gallery-more">
+              <button
+                className="button button-secondary"
+                disabled={loadingMore || loading}
+                onClick={() => void loadMorePhotos()}
+              >
+                {loadingMore && <LoaderCircle size={18} className="spin" />}
+                {loadingMore ? '正在加载' : '加载更多作品'}
+              </button>
+            </div>
           )}
         </main>
       ) : (
         <>
+          {uploadGuide && !publicView && (
+            <div className="upload-guide" role="status">
+              <div>
+                <strong>准备上传你的照片</strong>
+                <p>
+                  {albumId
+                    ? '请选择本地照片，上传后默认仅你可见。'
+                    : '先创建一个拍摄项目，再选择本地照片。'}
+                </p>
+              </div>
+              <button
+                className="button button-primary"
+                onClick={() => (albumId ? fileInput.current?.click() : setCreateOpen(true))}
+              >
+                {albumId ? '选择照片' : '新建项目并上传'}
+              </button>
+              <button
+                className="icon-button"
+                aria-label="关闭上传引导"
+                onClick={() => setUploadGuide(false)}
+              >
+                <X size={20} />
+              </button>
+            </div>
+          )}
           {!publicView && tab !== 'trash' && (
             <div className="album-rail">
               <span className="rail-label">
@@ -1166,7 +1651,7 @@ export default function App() {
                       onClick={() => setPublishOpen(true)}
                     >
                       <Globe size={16} />
-                      <span>{album.isPublic ? '分享作品集' : '发布作品集'}</span>
+                      <span>{album.isPublic ? '管理公开作品' : '发布精选作品'}</span>
                     </button>
                   </div>
                 )}
@@ -1216,7 +1701,7 @@ export default function App() {
                     <button
                       className="glass-icon"
                       aria-label="预览封面大图"
-                      onClick={() => hero && setPreviewId(hero.id)}
+                      onClick={() => hero && openPhoto(hero)}
                     >
                       <Expand size={17} />
                     </button>
@@ -1284,9 +1769,9 @@ export default function App() {
                       value={sort}
                       onChange={(e) => setSort(e.target.value)}
                     >
-                      <option value="date">导入时间</option>
+                      <option value="date">{publicView ? '作品时间' : '导入时间'}</option>
                       <option value="name">文件名称</option>
-                      <option value="rating">星级优先</option>
+                      {!publicView && <option value="rating">星级优先</option>}
                     </select>
                     <Grid2X2 size={18} className="grid-indicator" />
                     {!publicView && (
@@ -1356,7 +1841,8 @@ export default function App() {
                         selected={selected.has(p.id)}
                         selecting={selecting}
                         readOnly={publicView}
-                        onOpen={() => setPreviewId(p.id)}
+                        onOpen={() => openPhoto(p)}
+                        onFavorite={() => void favoritePhoto(p)}
                         onSelect={() => selectPhoto(p.id)}
                         onPick={() =>
                           void patchPhoto(p.id, {
@@ -1405,7 +1891,9 @@ export default function App() {
                   <div className="workspace-footer">
                     <span>
                       <LockKeyhole size={12} />
-                      {album.isPublic ? '你已主动发布此作品集' : '当前项目仅你可见'}
+                      {album.isPublic
+                        ? '仅主动选中的照片已公开，其余照片继续私密'
+                        : '当前项目仅你可见'}
                     </span>
                     <span>本地智能筛选仅提供建议，照片由你决定取舍。</span>
                   </div>
@@ -1457,6 +1945,16 @@ export default function App() {
                 />
               )}
             </main>
+          ) : publicView ? (
+            <Empty
+              icon={Globe}
+              title="作品集暂不可用"
+              text="作品可能尚未发布或已经撤回，你仍然可以浏览公共图库。"
+            >
+              <button className="button button-secondary" onClick={() => navigate('/')}>
+                返回公共图库
+              </button>
+            </Empty>
           ) : !loading && !loadError && !publicView ? (
             <main className="welcome-page">
               <div className="welcome-decoration">
@@ -1536,6 +2034,14 @@ export default function App() {
           </button>
           <span className="selection-divider" />
           <button
+            className="button button-small button-primary"
+            onClick={() => setPublishOpen(true)}
+            disabled={working}
+          >
+            <Globe size={17} />
+            发布所选照片
+          </button>
+          <button
             className="button button-small button-secondary"
             disabled={working}
             onClick={() => void bulk({ pick: 'keep' })}
@@ -1595,10 +2101,11 @@ export default function App() {
         <CreateAlbum
           onClose={() => setCreateOpen(false)}
           onCreate={(a) => {
+            if (!user || uploadUserRef.current !== user.id || routeRef.current !== path) return;
             setAlbums((current) => [a, ...current]);
             setAlbumId(a.id);
             setTab('projects');
-            navigate('/');
+            navigate('/library');
             setCreateOpen(false);
             reload();
             tell('项目已创建，可以上传照片了');
@@ -1618,79 +2125,63 @@ export default function App() {
           photos={
             visiblePhotos.length && visiblePhotos.some((p) => p.id === previewId)
               ? visiblePhotos.filter((p) => !p.deletedAt)
-              : activePhotos
+              : feedView
+                ? galleryPhotos
+                : activePhotos
           }
           initialId={previewId}
-          onClose={() => setPreviewId(null)}
+          onClose={closePreview}
           onUpdate={patchPhoto}
           onSetCover={publicView ? undefined : setCover}
           readOnly={publicView}
+          currentUserId={user?.id}
+          onDownload={(photo) => void requestDownload(photo)}
+          onFavorite={publicView ? (photo) => void favoritePhoto(photo) : undefined}
+          onNavigateAlbum={(photo) => {
+            closePreview();
+            if (photo.albumSlug) navigate('/p/' + encodeURIComponent(photo.albumSlug));
+          }}
+          onActiveChange={(id) => {
+            setPreviewId(id);
+            if (publicView) navigate(path + '?photo=' + encodeURIComponent(id), true);
+          }}
+          isInteractionBlocked={!!authIntent}
         />
       )}
       {publishOpen && album && (
-        <Modal
-          title={album.isPublic ? '分享你的作品集' : '发布公开作品集'}
+        <PublishDialog
+          album={album}
+          photos={activePhotos}
+          initialSelectedIds={[...selected]}
           onClose={() => setPublishOpen(false)}
-        >
-          <div className="publish-icon">
-            <Globe size={30} />
-          </div>
-          <h3 className="publish-title">{album.title}</h3>
-          <p className="muted publish-copy">
-            {album.isPublic
-              ? '这个相册已经公开，拥有链接的任何人都可以浏览。你可以随时撤回。'
-              : `发布后，这个相册中当前的 ${activePhotos.length} 张照片都将公开，允许搜索引擎收录。请先移除不希望公开的照片。`}
-          </p>
-          <p className="small-text muted">公开页面提供去除位置信息的展示图；私密原图仍由你保管。</p>
-          {album.isPublic && (
-            <div className="share-link">
-              <input
-                readOnly
-                value={`${window.location.origin}/p/${album.slug}`}
-                aria-label="公开作品链接"
-              />
-              <button className="text-button" onClick={() => void copyLink()}>
-                复制链接
-              </button>
-            </div>
+          onSave={savePublication}
+        />
+      )}
+      {authIntent && (
+        <AuthDialog
+          intent={authIntent.kind}
+          photo={(feedView ? galleryPhotos : photos).find(
+            (photo) => photo.id === authIntent.photoId,
           )}
-          <div className="modal-actions">
-            {album.isPublic ? (
-              <>
-                <button
-                  className="button button-danger"
-                  onClick={() => void publish(false)}
-                  disabled={working}
-                >
-                  撤回公开
-                </button>
-                <button
-                  className="button button-primary"
-                  onClick={() => {
-                    setPublishOpen(false);
-                    navigate(`/p/${album.slug}`);
-                  }}
-                >
-                  查看作品集
-                  <ArrowUpRight size={16} />
-                </button>
-              </>
-            ) : (
-              <>
-                <button className="button button-secondary" onClick={() => setPublishOpen(false)}>
-                  再检查一下
-                </button>
-                <button
-                  className="button button-primary"
-                  disabled={working || !activePhotos.length}
-                  onClick={() => void publish(true)}
-                >
-                  {working && <LoaderCircle className="spin" size={16} />}确认发布
-                </button>
-              </>
-            )}
-          </div>
-        </Modal>
+          onClose={() => {
+            setAuthIntent(null);
+            requestAnimationFrame(() => window.scrollTo({ top: authIntent.scrollY }));
+          }}
+          onLogin={(value) => {
+            const intent = authIntent;
+            if (
+              normalizeReturnPath(intent.path, window.location.origin) !==
+              window.location.pathname + window.location.search
+            )
+              return;
+            authEpoch.current++;
+            setSessionLoading(false);
+            setUser(value);
+            setAuthIntent(null);
+            setResumeIntent(intent);
+            setLoadError('');
+          }}
+        />
       )}
       {deleteOpen && (
         <Modal title="将选中的照片移入回收站？" onClose={() => setDeleteOpen(false)}>
@@ -1721,7 +2212,7 @@ function Loading() {
   return (
     <div className="loading-state" role="status">
       <LoaderCircle size={25} className="spin" />
-      <span>正在整理光影……</span>
+      <span>正在加载照片，首次连接可能需要稍候……</span>
     </div>
   );
 }

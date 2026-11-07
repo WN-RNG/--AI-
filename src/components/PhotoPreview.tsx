@@ -10,6 +10,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Heart,
+  FolderOpen,
   Image,
   Info,
   LoaderCircle,
@@ -21,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import type { Photo } from '../../shared/types';
+import { acquireBodyScrollLock } from './dialogScrollLock';
 import './PhotoPreview.css';
 
 type PhotoPatch = {
@@ -36,8 +39,23 @@ export interface PhotoPreviewProps {
   onClose: () => void;
   onUpdate: (id: string, patch: PhotoPatch) => Promise<void>;
   onSetCover?: (id: string) => Promise<void>;
+  onDownload?: (photo: Photo) => void;
+  onFavorite?: (photo: Photo) => void;
+  onNavigateAlbum?: (photo: Photo) => void;
+  onActiveChange?: (id: string) => void;
+  isInteractionBlocked?: boolean;
+  currentUserId?: string;
   readOnly?: boolean;
 }
+
+type PublicPhoto = Photo & {
+  title?: string;
+  authorName?: string;
+  albumTitle?: string;
+  albumSlug?: string;
+  allowDownload?: boolean;
+  isFavorite?: boolean;
+};
 
 type Point = { x: number; y: number };
 const ZERO: Point = { x: 0, y: 0 };
@@ -83,11 +101,21 @@ export function PhotoPreview({
   onClose,
   onUpdate,
   onSetCover,
+  onDownload,
+  onFavorite,
+  onNavigateAlbum,
+  onActiveChange,
+  isInteractionBlocked = false,
+  currentUserId,
   readOnly = false,
 }: PhotoPreviewProps) {
   const available = useMemo(() => photos.filter((photo) => !photo.deletedAt), [photos]);
   const [activeId, setActiveId] = useState(initialId);
   const current = available.find((photo) => photo.id === activeId) ?? available[0];
+  const publicPhoto = current as PublicPhoto | undefined;
+  const isCurrentOwner = !readOnly || (!!currentUserId && current?.authorId === currentUserId);
+  const downloadAllowed = isCurrentOwner || publicPhoto?.allowDownload === true;
+  const displayUrl = current?.previewUrl || current?.thumbnailUrl || '';
   const activeIndex = current ? available.findIndex((photo) => photo.id === current.id) : -1;
   const [showInfo, setShowInfo] = useState(true);
   const [zoom, setZoom] = useState(1);
@@ -113,7 +141,8 @@ export function PhotoPreview({
   const dragRef = useRef<{ pointerId: number; start: Point; pan: Point } | null>(null);
   const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   const wheelHandlerRef = useRef<(event: WheelEvent) => void>(() => undefined);
-  const imageKey = `${current?.id ?? ''}:${current?.url ?? ''}:${retryKey}`;
+  const lastNotifiedIdRef = useRef<string | null>(null);
+  const imageKey = `${current?.id ?? ''}:${displayUrl}:${retryKey}`;
   const currentImageKeyRef = useRef(imageKey);
   currentImageKeyRef.current = imageKey;
   const loaded = imageStatus.key === imageKey && imageStatus.state === 'ready';
@@ -162,7 +191,7 @@ export function PhotoPreview({
   }
 
   function navigate(offset: number) {
-    if (available.length < 2 || busy) return;
+    if (available.length < 2 || busy || isInteractionBlocked) return;
     setConfirming(false);
     setError('');
     setActiveId(available[(activeIndex + offset + available.length) % available.length].id);
@@ -223,6 +252,8 @@ export function PhotoPreview({
 
   // 事件处理通过 ref 获取最新状态，避免反复绑定全局键盘和滚轮事件。
   keyHandlerRef.current = (event) => {
+    // 上层认证弹窗接管 Escape / Tab；预览仍保持在当前照片和缩放位置。
+    if (isInteractionBlocked) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       if (confirming) cancelDelete();
@@ -276,7 +307,7 @@ export function PhotoPreview({
   };
 
   wheelHandlerRef.current = (event) => {
-    if (confirming || broken) return;
+    if (confirming || broken || isInteractionBlocked) return;
     event.preventDefault();
     const bounds = stageRef.current?.getBoundingClientRect();
     if (!bounds) return;
@@ -289,13 +320,12 @@ export function PhotoPreview({
   useEffect(() => {
     const previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const releaseScrollLock = acquireBodyScrollLock(document.body);
     closeRef.current?.focus();
     const keydown = (event: KeyboardEvent) => keyHandlerRef.current(event);
     document.addEventListener('keydown', keydown);
     return () => {
-      document.body.style.overflow = previousOverflow;
+      releaseScrollLock();
       document.removeEventListener('keydown', keydown);
       if (previousFocus?.isConnected) previousFocus.focus();
     };
@@ -307,11 +337,18 @@ export function PhotoPreview({
   }, [available, activeId, onClose]);
 
   useEffect(() => {
+    if (current?.id && onActiveChange && current.id !== lastNotifiedIdRef.current) {
+      lastNotifiedIdRef.current = current.id;
+      onActiveChange(current.id);
+    }
+  }, [current?.id, onActiveChange]);
+
+  useEffect(() => {
     resetView();
     setError('');
     setDragging(false);
     dragRef.current = null;
-  }, [current?.id, current?.url]);
+  }, [current?.id, displayUrl]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -348,7 +385,7 @@ export function PhotoPreview({
   }, [confirming]);
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0 || !loaded || broken || zoom <= 1) return;
+    if (event.button !== 0 || !loaded || broken || zoom <= 1 || isInteractionBlocked) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
@@ -379,16 +416,25 @@ export function PhotoPreview({
   }
 
   if (!current) return null;
+  const displayedDimensions = readOnly
+    ? loaded
+      ? `${imageWidth.toLocaleString()} × ${imageHeight.toLocaleString()}`
+      : '加载中'
+    : `${current.width.toLocaleString()} × ${current.height.toLocaleString()}`;
 
   return (
     <div
       className="pp-overlay"
       ref={dialogRef}
       role="dialog"
-      aria-modal="true"
+      aria-modal={!isInteractionBlocked}
       aria-label={`照片预览：${current.filename}`}
     >
-      <div className="pp-shell" inert={confirming} aria-hidden={confirming ? true : undefined}>
+      <div
+        className="pp-shell"
+        inert={confirming || isInteractionBlocked}
+        aria-hidden={confirming || isInteractionBlocked ? true : undefined}
+      >
         <header className="pp-header">
           <div className="pp-title-area">
             <span className="pp-eyebrow">
@@ -421,15 +467,48 @@ export function PhotoPreview({
                 <span>设为封面</span>
               </button>
             )}
-            <a
-              className="pp-icon-button"
-              href={downloadUrl(current.url)}
-              download={current.filename}
-              aria-label={readOnly ? '下载图片' : '下载原图'}
-              title={readOnly ? '下载图片' : '下载原图'}
-            >
-              <Download size={19} />
-            </a>
+            {readOnly && onFavorite && (
+              <button
+                type="button"
+                className={`pp-icon-button pp-favorite ${publicPhoto?.isFavorite ? 'is-active' : ''}`}
+                onClick={() => onFavorite(current)}
+                aria-label={publicPhoto?.isFavorite ? '取消收藏作品' : '收藏作品'}
+                aria-pressed={!!publicPhoto?.isFavorite}
+                title={publicPhoto?.isFavorite ? '取消收藏' : '收藏作品'}
+              >
+                <Heart size={19} fill={publicPhoto?.isFavorite ? 'currentColor' : 'none'} />
+              </button>
+            )}
+            {onDownload || readOnly ? (
+              <button
+                type="button"
+                className="pp-icon-button"
+                onClick={() => onDownload?.(current)}
+                disabled={!downloadAllowed || !onDownload}
+                aria-label={
+                  !isCurrentOwner ? (downloadAllowed ? '下载展示图' : '作者未开放下载') : '下载原图'
+                }
+                title={
+                  !isCurrentOwner
+                    ? downloadAllowed
+                      ? '下载作者允许的展示图'
+                      : '作者未开放下载'
+                    : '下载原图'
+                }
+              >
+                <Download size={19} />
+              </button>
+            ) : (
+              <a
+                className="pp-icon-button"
+                href={downloadUrl(current.url)}
+                download={current.filename}
+                aria-label="下载原图"
+                title="下载原图"
+              >
+                <Download size={19} />
+              </a>
+            )}
             <button
               className={`pp-icon-button ${showInfo ? 'is-active' : ''}`}
               onClick={() => setShowInfo(!showInfo)}
@@ -505,7 +584,7 @@ export function PhotoPreview({
               <img
                 key={`${current.id}-${retryKey}`}
                 className="pp-photo"
-                src={current.url}
+                src={displayUrl}
                 alt={current.filename}
                 draggable={false}
                 style={{
@@ -553,17 +632,15 @@ export function PhotoPreview({
             )}
             <div className="pp-image-caption">
               <span>
-                {current.pick === 'keep'
-                  ? '已选入作品'
-                  : current.pick === 'reject'
-                    ? '已标记淘汰'
-                    : '让每一张照片，都值得被看见。'}
+                {readOnly
+                  ? '公开作品 · 展示图预览'
+                  : current.pick === 'keep'
+                    ? '已选入作品'
+                    : current.pick === 'reject'
+                      ? '已标记淘汰'
+                      : '让每一张照片，都值得被看见。'}
               </span>
-              <span>
-                {current.width}
-                {' × '}
-                {current.height}
-              </span>
+              <span>{displayedDimensions}</span>
             </div>
           </div>
 
@@ -576,32 +653,59 @@ export function PhotoPreview({
               <div className="pp-info-preview">
                 <img src={current.thumbnailUrl} alt="" />
               </div>
-              <h3>{current.filename}</h3>
+              <h3>{readOnly ? publicPhoto?.title || current.filename : current.filename}</h3>
+              {readOnly && (
+                <div className="pp-public-context">
+                  <span className="pp-author-name">{publicPhoto?.authorName || '创作者'}</span>
+                  {onNavigateAlbum ? (
+                    <button
+                      type="button"
+                      className="pp-album-link"
+                      onClick={() => onNavigateAlbum(current)}
+                    >
+                      <FolderOpen size={14} />
+                      <span>{publicPhoto?.albumTitle || '查看所属相册'}</span>
+                      <ChevronRight size={13} />
+                    </button>
+                  ) : (
+                    publicPhoto?.albumTitle && (
+                      <span className="pp-album-name">{publicPhoto.albumTitle}</span>
+                    )
+                  )}
+                  <p className="pp-download-permission">
+                    {isCurrentOwner
+                      ? '你是作品作者，可下载自己的原图'
+                      : downloadAllowed
+                        ? '作者允许登录后下载展示图'
+                        : '作者未开放下载'}
+                  </p>
+                </div>
+              )}
               <dl>
                 <div>
-                  <dt>分辨率</dt>
-                  <dd>
-                    {current.width.toLocaleString()}
-                    {' × '}
-                    {current.height.toLocaleString()}
-                  </dd>
+                  <dt>{readOnly ? '展示图尺寸' : '分辨率'}</dt>
+                  <dd>{displayedDimensions}</dd>
                 </div>
-                <div>
-                  <dt>文件大小</dt>
-                  <dd>{formatBytes(current.bytes)}</dd>
-                </div>
-                <div>
-                  <dt>文件格式</dt>
-                  <dd>{current.mime.split('/')[1]?.toUpperCase() ?? current.mime}</dd>
-                </div>
-                <div>
-                  <dt>拍摄时间</dt>
-                  <dd>{formatDate(current.capturedAt)}</dd>
-                </div>
-                <div>
-                  <dt>上传时间</dt>
-                  <dd>{formatDate(current.createdAt)}</dd>
-                </div>
+                {!readOnly && (
+                  <>
+                    <div>
+                      <dt>文件大小</dt>
+                      <dd>{formatBytes(current.bytes)}</dd>
+                    </div>
+                    <div>
+                      <dt>文件格式</dt>
+                      <dd>{current.mime.split('/')[1]?.toUpperCase() ?? current.mime}</dd>
+                    </div>
+                    <div>
+                      <dt>拍摄时间</dt>
+                      <dd>{formatDate(current.capturedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>上传时间</dt>
+                      <dd>{formatDate(current.createdAt)}</dd>
+                    </div>
+                  </>
+                )}
               </dl>
               {!readOnly && (
                 <>

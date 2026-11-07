@@ -614,16 +614,16 @@ test('publication exposes metadata-free previews, deletion hides media and revoc
   expectSuccess(uploaded.response, uploaded.body);
   const photo = uploaded.body.photos[0];
   assert.equal((await anonymous.json('/api/public/albums')).body.albums.length, 0);
-  const publish = await owner.json(`/api/albums/${created.id}`, {
-    method: 'PATCH',
-    json: { isPublic: true },
+  const publish = await owner.json(`/api/albums/${created.id}/publication`, {
+    method: 'PUT',
+    json: { photoIds: [photo.id], allowDownload: true, title: 'Public on purpose' },
   });
   expectSuccess(publish.response, publish.body);
   const publicRoute = `/api/public/albums/${created.slug}`;
   assert.equal((await anonymous.json(publicRoute)).body.photos.length, 1);
   assert.equal((await anonymous.json('/api/public/albums')).body.albums[0].id, created.id);
   for (const viewer of [anonymous, secondUser]) {
-    for (const route of [photo.url, `${photo.url}?download=1`, photo.thumbnailUrl]) {
+    for (const route of [photo.url, photo.previewUrl, photo.thumbnailUrl]) {
       const response = await viewer.request(route);
       assert.equal(response.status, 200);
       const bytes = Buffer.from(await response.arrayBuffer());
@@ -633,6 +633,8 @@ test('publication exposes metadata-free previews, deletion hides media and revoc
       assert.notDeepEqual(bytes, original);
     }
   }
+  assert.equal((await anonymous.request(`${photo.url}?download=1`)).status, 401);
+  assert.equal((await secondUser.request(`/api/photos/${photo.id}/download`)).status, 200);
   const download = await owner.request(`${photo.url}?download=1`);
   assert.deepEqual(Buffer.from(await download.arrayBuffer()), original);
 
@@ -642,7 +644,7 @@ test('publication exposes metadata-free previews, deletion hides media and revoc
   });
   expectSuccess(removed.response, removed.body);
   assert.equal((await detail(owner, created.id)).photos.length, 0);
-  assert.equal((await anonymous.json(publicRoute)).body.photos.length, 0);
+  expectDenied(await anonymous.request(publicRoute));
   expectDenied(await anonymous.request(photo.url));
   expectDenied(await anonymous.request(photo.thumbnailUrl));
   assert.equal((await owner.json('/api/trash')).body.photos[0].id, photo.id);
@@ -661,7 +663,13 @@ test('publication exposes metadata-free previews, deletion hides media and revoc
   expectSuccess(restored.response, restored.body);
   assert.equal(restored.body.photo.deletedAt, null);
   assert.equal((await owner.json('/api/trash')).body.photos.length, 0);
-  assert.equal((await anonymous.json(publicRoute)).body.photos.length, 1);
+  assert.equal(restored.body.photo.isPublished, false);
+  expectDenied(await anonymous.request(publicRoute));
+  const republish = await owner.json(`/api/albums/${created.id}/publication`, {
+    method: 'PUT',
+    json: { photoIds: [photo.id], allowDownload: false, title: 'Public again' },
+  });
+  expectSuccess(republish.response, republish.body);
   const revoke = await owner.json(`/api/albums/${created.id}`, {
     method: 'PATCH',
     json: { isPublic: false },

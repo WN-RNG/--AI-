@@ -1672,3 +1672,324 @@
 .pp-confirm-cancel {
   color: #8c8469;
 }
+/* 公共作品只提供作者、所属相册与展示图许可，沿用原有暖白信息侧栏。 */
+.pp-public-context {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 11px;
+  margin: -8px 0 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #e8e1d4;
+}
+.pp-author-name {
+  color: #69624f;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.pp-album-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid #e2ddcd;
+  border-radius: 5px;
+  color: #737952;
+  background: #f8f7ed;
+  font-size: 11px;
+  line-height: 1.6;
+  text-align: left;
+}
+.pp-album-link > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pp-album-link:hover {
+  background: #eeefdc;
+  border-color: #c8cead;
+}
+.pp-album-name {
+  color: #8a816d;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.pp-download-permission {
+  color: #9b927b;
+  font-size: 10px;
+  line-height: 1.8;
+  margin: 0;
+}
+.pp-favorite.is-active {
+  color: #9c8465;
+  background: #f6eee0;
+}
+.pp-overlay[aria-modal='false'] {
+  pointer-events: none;
+}
+@media (max-width: 760px) {
+  .pp-public-context {
+    gap: 8px;
+    margin-bottom: 17px;
+    padding-bottom: 14px;
+  }
+  .pp-author-name {
+    font-size: 11px;
+  }
+  .pp-album-link {
+    min-height: 34px;
+  }
+}
+/* 阅读字号：操作与正文 16px，辅助信息至少 14px，不改变照片画布行为。 */
+.pp-header {
+  min-height: 84px;
+}
+.pp-title-area h2 {
+  font-size: 20px;
+  line-height: 1.5;
+}
+.pp-title-area .pp-eyebrow,
+.pp-eyebrow,
+.pp-position,
+.pp-position > span,
+.pp-image-caption,
+.pp-image-caption span:last-child,
+.pp-view-hint,
+.pp-download-permission,
+.pp-filmstrip-label,
+.pp-filmstrip-label > span:first-child,
+.pp-thumbnail-index,
+.pp-panel-heading > span:last-child,
+.pp-info-section-label,
+.pp-information dt,
+.pp-analysis-tags > span,
+.pp-analysis-tags p,
+.pp-status,
+.pp-confirm .pp-eyebrow {
+  font-size: 14px;
+  line-height: 1.65;
+  letter-spacing: 0.3px;
+}
+.pp-position > span {
+  white-space: nowrap;
+}
+.pp-cover-button,
+.pp-fit-button {
+  font-size: 16px !important;
+}
+.pp-image-state,
+.pp-error,
+.pp-information h3,
+.pp-information dd,
+.pp-panel-heading,
+.pp-pick-button,
+.pp-text-button,
+.pp-author-name,
+.pp-album-link,
+.pp-album-name,
+.pp-confirm p,
+.pp-confirm-actions button {
+  font-size: 16px;
+  line-height: 1.7;
+}
+.pp-pick-button {
+  font-size: 16px !important;
+}
+.pp-zoom-value {
+  font-size: 14px;
+  min-width: 51px;
+}
+.pp-information {
+  width: 336px;
+  padding: 27px 24px;
+  overflow: auto;
+}
+.pp-information dl {
+  gap: 17px;
+}
+.pp-information dl > div {
+  gap: 14px;
+}
+.pp-information dd {
+  overflow-wrap: anywhere;
+}
+.pp-information h3 {
+  overflow-wrap: anywhere;
+}
+.pp-author-name,
+.pp-album-name {
+  overflow-wrap: anywhere;
+}
+.pp-album-link {
+  min-height: 42px;
+  height: auto;
+}
+.pp-album-link > span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+.pp-download-permission {
+  margin-top: 1px;
+}
+.pp-image-caption {
+  bottom: 7px;
+}
+.pp-filmstrip-label {
+  margin-bottom: 10px;
+}
+.pp-confirm h3 {
+  font-size: 22px;
+}
+.pp-confirm .pp-confirm-error {
+  font-size: 16px;
+}
+@media (max-width: 1100px) {
+  .pp-information {
+    width: 320px;
+    padding: 24px 21px;
+  }
+  .pp-header {
+    min-height: 80px;
+    padding: 12px 20px;
+  }
+  .pp-title-area h2 {
+    font-size: 20px;
+  }
+  .pp-title-area .pp-eyebrow {
+    font-size: 14px;
+  }
+  .pp-toolbar {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0;
+    padding: 7px 14px;
+  }
+  .pp-zoom-controls {
+    flex: 1 0 100%;
+    justify-content: center;
+    min-height: 46px;
+  }
+  .pp-selection-controls {
+    width: 100%;
+    min-height: 46px;
+    justify-content: center;
+    padding-top: 4px;
+    border-top: 1px solid #eae3d4;
+  }
+  .pp-overlay .pp-star {
+    min-width: 40px;
+  }
+  .pp-pick-button {
+    min-width: 76px;
+  }
+}
+@media (max-width: 760px) {
+  .pp-header {
+    min-height: 80px;
+    padding: 11px 13px;
+  }
+  .pp-title-area h2 {
+    font-size: 18px;
+  }
+  .pp-information {
+    width: 100%;
+    max-height: 210px;
+    min-height: 155px;
+    padding: 19px 21px;
+  }
+  .pp-information dl {
+    gap: 15px 20px;
+  }
+  .pp-information dt {
+    font-size: 14px;
+  }
+  .pp-information dd,
+  .pp-information h3,
+  .pp-author-name,
+  .pp-panel-heading,
+  .pp-album-link {
+    font-size: 16px;
+  }
+  .pp-panel-heading > span:last-child {
+    font-size: 14px;
+  }
+  .pp-download-permission,
+  .pp-position,
+  .pp-position > span,
+  .pp-filmstrip-label,
+  .pp-filmstrip-label > span:first-child {
+    font-size: 14px;
+  }
+  .pp-header-actions .pp-icon-button,
+  .pp-cover-button {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+  }
+  .pp-selection-controls {
+    min-height: 46px;
+    height: auto;
+  }
+  .pp-pick-button {
+    min-width: 40px;
+  }
+  .pp-image-caption span:first-child {
+    white-space: normal;
+    max-width: 65%;
+  }
+  .pp-view-area {
+    flex-basis: 285px;
+    min-height: 285px;
+  }
+}
+@media (max-width: 480px) {
+  .pp-title-area h2 {
+    max-width: 125px;
+  }
+  .pp-position {
+    display: none;
+  }
+  .pp-selection-controls {
+    flex-wrap: wrap;
+    padding-bottom: 4px;
+  }
+  .pp-rating {
+    flex: 1 0 100%;
+    justify-content: center;
+    margin: 0;
+  }
+  .pp-rating-divider {
+    display: none;
+  }
+  .pp-overlay .pp-star {
+    min-width: 40px;
+  }
+  .pp-information dl {
+    grid-template-columns: 1fr;
+  }
+  .pp-information dl > div {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+  }
+  .pp-information dd {
+    text-align: right;
+  }
+  .pp-information {
+    max-height: 210px;
+  }
+  .pp-header {
+    padding-left: 11px;
+    padding-right: 6px;
+    gap: 2px;
+  }
+  .pp-view-area {
+    flex-basis: 260px;
+    min-height: 260px;
+  }
+}

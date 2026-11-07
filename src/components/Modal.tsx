@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
+import { acquireBodyScrollLock } from './dialogScrollLock';
 
 export default function Modal({
   title,
@@ -22,8 +23,7 @@ export default function Modal({
   onCloseRef.current = onClose;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement;
-    const oldOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const releaseScrollLock = acquireBodyScrollLock(document.body);
     const panel = ref.current;
     const focusable = () => [
       ...(panel?.querySelectorAll<HTMLElement>(
@@ -48,7 +48,7 @@ export default function Modal({
     }
     document.addEventListener('keydown', key);
     return () => {
-      document.body.style.overflow = oldOverflow;
+      releaseScrollLock();
       document.removeEventListener('keydown', key);
       previous?.focus();
     };

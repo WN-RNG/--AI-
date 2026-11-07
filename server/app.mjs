@@ -91,6 +91,57 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
     CREATE INDEX IF NOT EXISTS albums_user ON albums(user_id);
     CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
   `);
+  // An atomic, one-time upgrade preserves only the photos already exposed by
+  // the old album-level flag. New uploads always use the private column defaults.
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+      name TEXT PRIMARY KEY, applied_at TEXT NOT NULL
+    )`);
+    if (
+      !db.prepare('SELECT name FROM schema_migrations WHERE name=?').get('photo-publication-v1')
+    ) {
+      const columns = (table) =>
+        new Set(
+          db
+            .prepare(`PRAGMA table_info(${table})`)
+            .all()
+            .map((row) => row.name),
+        );
+      const albumColumns = columns('albums');
+      const photoColumns = columns('photos');
+      if (!albumColumns.has('public_title'))
+        db.exec('ALTER TABLE albums ADD COLUMN public_title TEXT');
+      for (const [name, declaration] of [
+        ['is_published', 'INTEGER NOT NULL DEFAULT 0'],
+        ['allow_download', 'INTEGER NOT NULL DEFAULT 0'],
+        ['is_featured', 'INTEGER NOT NULL DEFAULT 0'],
+        ['published_at', 'TEXT'],
+      ])
+        if (!photoColumns.has(name))
+          db.exec(`ALTER TABLE photos ADD COLUMN ${name} ${declaration}`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS favorites (
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          photo_id TEXT NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL, PRIMARY KEY(user_id, photo_id)
+        );
+        CREATE INDEX IF NOT EXISTS photos_publication ON photos(is_published, deleted_at, published_at DESC, id DESC);
+        UPDATE photos SET is_published=1, is_featured=1, allow_download=0, published_at=created_at
+          WHERE deleted_at IS NULL AND album_id IN (SELECT id FROM albums WHERE is_public=1);
+        UPDATE albums SET public_title=title WHERE is_public=1;
+      `);
+      db.prepare('INSERT INTO schema_migrations(name,applied_at) VALUES(?,?)').run(
+        'photo-publication-v1',
+        timestamp(),
+      );
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    db.close();
+    throw error;
+  }
   // 重启只重置未完成任务的显示状态；用户再次触发分析时可复用已保存特征。
   db.prepare(
     "UPDATE albums SET analysis_status = 'idle' WHERE analysis_status IN ('queued','analyzing')",
@@ -189,6 +240,10 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
     url: `/api/photos/${row.id}/file`,
     previewUrl: `/api/photos/${row.id}/preview`,
     thumbnailUrl: `/api/photos/${row.id}/thumb`,
+    isPublished: !!row.is_published,
+    allowDownload: !!row.allow_download,
+    isFeatured: !!row.is_featured,
+    publishedAt: row.published_at,
   });
   const albumJSON = (row) => {
     const active = db
@@ -220,6 +275,7 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
       photoCount: active.length,
       coverUrl: cover ? `/api/photos/${cover.id}/preview` : null,
       analysisStatus: row.analysis_status,
+      publicTitle: row.public_title,
       stats: {
         duplicates: active.filter((p) => p.duplicate_of).length,
         similarGroups: new Set(active.map((p) => p.group_id).filter(Boolean)).size,
@@ -227,6 +283,139 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
         kept: active.filter((p) => p.pick === 'keep').length,
       },
     };
+  };
+  const publishedCondition = 'p.is_published=1 AND p.deleted_at IS NULL AND a.is_public=1';
+  const publicPhotoSelect = `SELECT p.*, a.user_id AS author_id,
+    COALESCE(NULLIF(a.public_title,''),a.title) AS public_album_title,
+    a.slug AS album_slug, u.name AS author_name,
+    EXISTS(SELECT 1 FROM favorites f WHERE f.photo_id=p.id AND f.user_id=?) AS is_favorite
+    FROM photos p JOIN albums a ON a.id=p.album_id JOIN users u ON u.id=a.user_id`;
+  const publicPhotoJSON = (row) => ({
+    id: row.id,
+    albumId: row.album_id,
+    filename: row.filename,
+    width: row.width,
+    height: row.height,
+    createdAt: row.created_at,
+    url: `/api/photos/${row.id}/preview`,
+    previewUrl: `/api/photos/${row.id}/preview`,
+    thumbnailUrl: `/api/photos/${row.id}/thumb`,
+    publishedAt: row.published_at,
+    allowDownload: !!row.allow_download,
+    isFavorite: !!row.is_favorite,
+    isFeatured: !!row.is_featured,
+    authorId: row.author_id,
+    authorName: row.author_name,
+    albumTitle: row.public_album_title,
+    albumSlug: row.album_slug,
+  });
+  const publicAlbumJSON = (row, photos) => {
+    const ids = new Set(photos.map((photo) => photo.id));
+    const covers = JSON.parse(row.cover_photo_ids).filter((id) => ids.has(id));
+    const cover =
+      photos.find((photo) => photo.id === row.cover_photo_id) ||
+      photos.find((photo) => covers.includes(photo.id)) ||
+      photos[0];
+    const title = row.public_title || row.title;
+    return {
+      id: row.id,
+      title,
+      publicTitle: title,
+      createdAt: row.created_at,
+      slug: row.slug,
+      photoCount: photos.length,
+      isPublic: true,
+      coverMode: row.cover_mode,
+      coverPhotoId: cover?.id || null,
+      coverPhotoIds: covers,
+      slideInterval: row.slide_interval,
+      coverUrl: cover ? `/api/photos/${cover.id}/preview` : null,
+    };
+  };
+  const readPublicAlbum = (slug, userId = '') => {
+    const album = db.prepare('SELECT * FROM albums WHERE slug=? AND is_public=1').get(slug);
+    if (!album) return null;
+    const photos = db
+      .prepare(
+        `${publicPhotoSelect} WHERE ${publishedCondition} AND a.id=?
+      ORDER BY p.published_at DESC,p.id DESC`,
+      )
+      .all(userId, album.id)
+      .map(publicPhotoJSON);
+    return photos.length ? { album: publicAlbumJSON(album, photos), photos } : null;
+  };
+  const readPublicAlbums = () =>
+    db
+      .prepare(
+        `SELECT * FROM albums a WHERE is_public=1
+      AND EXISTS(SELECT 1 FROM photos p WHERE p.album_id=a.id AND p.is_published=1 AND p.deleted_at IS NULL)
+      ORDER BY created_at DESC,id DESC`,
+      )
+      .all()
+      .map((album) => readPublicAlbum(album.slug).album);
+  const readPublicPhotos = (input = {}, userId = '') => {
+    const sort = input.sort === undefined ? 'featured' : input.sort;
+    if (!['featured', 'latest'].includes(sort)) throw problem(400, '图库排序方式不正确');
+    const q = textValue(input.q, 120, '搜索词');
+    const rawLimit = input.limit === undefined ? '48' : String(input.limit);
+    if (!/^[1-9][0-9]{0,2}$/.test(rawLimit) || Number(rawLimit) > 100)
+      throw problem(400, '每页数量需要为 1 至 100');
+    const limit = Number(rawLimit);
+    let after = null;
+    if (input.cursor !== undefined && input.cursor !== '') {
+      try {
+        if (
+          typeof input.cursor !== 'string' ||
+          input.cursor.length > 2048 ||
+          !/^[\w-]+$/.test(input.cursor)
+        )
+          throw new Error();
+        after = JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8'));
+        if (
+          after.v !== 1 ||
+          after.sort !== sort ||
+          after.q !== q ||
+          after.limit !== limit ||
+          typeof after.at !== 'string' ||
+          !Number.isFinite(Date.parse(after.at)) ||
+          typeof after.id !== 'string' ||
+          !after.id ||
+          after.id.length > 128
+        )
+          throw new Error();
+      } catch {
+        throw problem(400, '分页位置无效，请重新加载图库');
+      }
+    }
+    const conditions = [publishedCondition];
+    const params = [userId];
+    if (sort === 'featured') conditions.push('p.is_featured=1');
+    if (q) {
+      const like = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
+      conditions.push(
+        `(p.filename LIKE ? ESCAPE '\\' OR COALESCE(NULLIF(a.public_title,''),a.title) LIKE ? ESCAPE '\\' OR u.name LIKE ? ESCAPE '\\')`,
+      );
+      params.push(like, like, like);
+    }
+    if (after) {
+      conditions.push('(p.published_at<? OR (p.published_at=? AND p.id<?))');
+      params.push(after.at, after.at, after.id);
+    }
+    const rows = db
+      .prepare(
+        `${publicPhotoSelect} WHERE ${conditions.join(' AND ')}
+      ORDER BY p.published_at DESC,p.id DESC LIMIT ?`,
+      )
+      .all(...params, limit + 1);
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    const nextCursor =
+      rows.length > limit
+        ? Buffer.from(
+            JSON.stringify({ v: 1, sort, q, limit, at: last.published_at, id: last.id }),
+          ).toString('base64url')
+        : null;
+    return { photos: page.map(publicPhotoJSON), nextCursor };
   };
   const clients = new Map();
   let closed = false;
@@ -440,6 +629,7 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
   app.patch('/api/albums/:id', requireUser, (req, res) => {
     const album = ownAlbum(req.params.id, req.user.id);
     const input = req.body;
+    if (input.isPublic === true) throw problem(400, '请先选择照片，再通过发布设置公开作品');
     if (input.title !== undefined) {
       album.title = textValue(input.title, 120, '相册名称');
       if (!album.title) throw problem(400, '请填写相册名称');
@@ -482,21 +672,89 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
       if (typeof input.isPublic !== 'boolean') throw problem(400, '公开设置格式不正确');
       album.is_public = Number(input.isPublic);
     }
-    db.prepare(
-      'UPDATE albums SET title=?,description=?,location=?,cover_mode=?,cover_photo_id=?,cover_photo_ids=?,slide_interval=?,is_public=? WHERE id=?',
-    ).run(
-      album.title,
-      album.description,
-      album.location,
-      album.cover_mode,
-      album.cover_photo_id,
-      album.cover_photo_ids,
-      album.slide_interval,
-      album.is_public,
-      album.id,
-    );
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare(
+        'UPDATE albums SET title=?,description=?,location=?,cover_mode=?,cover_photo_id=?,cover_photo_ids=?,slide_interval=?,is_public=? WHERE id=?',
+      ).run(
+        album.title,
+        album.description,
+        album.location,
+        album.cover_mode,
+        album.cover_photo_id,
+        album.cover_photo_ids,
+        album.slide_interval,
+        album.is_public,
+        album.id,
+      );
+      if (input.isPublic === false)
+        db.prepare(
+          `UPDATE photos SET is_published=0,
+        allow_download=0,is_featured=0,published_at=NULL WHERE album_id=?`,
+        ).run(album.id);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
     notify(req.user.id, { type: 'change', albumId: album.id });
     res.json({ album: albumJSON(album) });
+  });
+  app.put('/api/albums/:id/publication', requireUser, (req, res) => {
+    const album = ownAlbum(req.params.id, req.user.id);
+    const { photoIds, allowDownload, featuredPhotoIds } = req.body;
+    const validIds = (ids) =>
+      Array.isArray(ids) &&
+      ids.length <= 3000 &&
+      ids.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 128) &&
+      new Set(ids).size === ids.length;
+    if (!validIds(photoIds) || typeof allowDownload !== 'boolean')
+      throw problem(400, '请选择有效的照片和下载许可');
+    const title = textValue(req.body.title, 120, '公开标题');
+    if (photoIds.length && !title) throw problem(400, '请填写公开标题');
+    const featured = featuredPhotoIds === undefined ? photoIds : featuredPhotoIds;
+    const selected = new Set(photoIds);
+    if (!validIds(featured) || featured.some((id) => !selected.has(id)))
+      throw problem(400, '精选照片必须属于本次发布范围');
+    const featuredSet = new Set(featured);
+    const stamp = timestamp();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const photos = db.prepare('SELECT * FROM photos WHERE album_id=?').all(album.id);
+      const active = new Set(photos.filter((photo) => !photo.deleted_at).map((photo) => photo.id));
+      if (photoIds.some((id) => !active.has(id)))
+        throw problem(400, '只能发布当前相册内未删除的照片');
+      const update = db.prepare(
+        `UPDATE photos SET is_published=?,allow_download=?,is_featured=?,published_at=? WHERE id=?`,
+      );
+      for (const photo of photos) {
+        const published = selected.has(photo.id);
+        update.run(
+          Number(published),
+          Number(published && allowDownload),
+          Number(published && featuredSet.has(photo.id)),
+          published ? photo.published_at || stamp : null,
+          photo.id,
+        );
+      }
+      db.prepare('UPDATE albums SET is_public=?,public_title=? WHERE id=?').run(
+        Number(photoIds.length > 0),
+        title || album.public_title || album.title,
+        album.id,
+      );
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    notify(req.user.id, { type: 'change', albumId: album.id });
+    for (const row of db
+      .prepare(
+        `SELECT DISTINCT f.user_id FROM favorites f JOIN photos p ON p.id=f.photo_id WHERE p.album_id=?`,
+      )
+      .all(album.id))
+      notify(row.user_id, { type: 'favorites-change' });
+    res.json({ album: albumJSON(ownAlbum(album.id, req.user.id)) });
   });
 
   // 上传处理：先限制 multipart 请求，再解码图片、生成衍生图并保存记录。
@@ -664,12 +922,36 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
     }
     if (input.deleted === true) photo.deleted_at = timestamp();
     if (input.restore === true || input.deleted === false) photo.deleted_at = null;
-    db.prepare('UPDATE photos SET pick=?,rating=?,deleted_at=? WHERE id=?').run(
-      photo.pick,
-      photo.rating,
-      photo.deleted_at,
-      photo.id,
-    );
+    if (photo.deleted_at) {
+      photo.is_published = 0;
+      photo.allow_download = 0;
+      photo.is_featured = 0;
+      photo.published_at = null;
+    }
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare(
+        `UPDATE photos SET pick=?,rating=?,deleted_at=?,is_published=?,allow_download=?,is_featured=?,published_at=? WHERE id=?`,
+      ).run(
+        photo.pick,
+        photo.rating,
+        photo.deleted_at,
+        photo.is_published,
+        photo.allow_download,
+        photo.is_featured,
+        photo.published_at,
+        photo.id,
+      );
+      db.prepare(
+        `UPDATE albums SET is_public=CASE WHEN is_public=1 AND EXISTS(
+        SELECT 1 FROM photos WHERE album_id=albums.id AND is_published=1 AND deleted_at IS NULL
+        ) THEN 1 ELSE 0 END WHERE id=?`,
+      ).run(photo.album_id);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
     notify(req.user.id, { type: 'change', albumId: photo.album_id });
     res.json({ photo: photoJSON(photo) });
   });
@@ -684,32 +966,75 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
         .map(photoJSON),
     }),
   );
-  for (const kind of ['file', 'preview', 'thumb'])
+  app.get('/api/favorites', requireUser, (req, res) => {
+    const photos = db
+      .prepare(
+        `${publicPhotoSelect} JOIN favorites saved ON saved.photo_id=p.id AND saved.user_id=?
+      WHERE ${publishedCondition} ORDER BY saved.created_at DESC,p.id DESC`,
+      )
+      .all(req.user.id, req.user.id)
+      .map(publicPhotoJSON);
+    const unavailableCount = db
+      .prepare(
+        `SELECT count(*) AS count FROM favorites f
+      JOIN photos p ON p.id=f.photo_id JOIN albums a ON a.id=p.album_id
+      WHERE f.user_id=? AND NOT (${publishedCondition})`,
+      )
+      .get(req.user.id).count;
+    res.json({ photos, unavailableCount });
+  });
+  app.put('/api/photos/:id/favorite', requireUser, (req, res) => {
+    if (typeof req.body.favorite !== 'boolean') throw problem(400, '收藏状态不正确');
+    if (req.body.favorite) {
+      const photo = db
+        .prepare(
+          `SELECT p.id FROM photos p JOIN albums a ON a.id=p.album_id
+        WHERE p.id=? AND ${publishedCondition}`,
+        )
+        .get(req.params.id);
+      if (!photo) throw problem(404, '照片不存在或已撤回公开');
+      db.prepare(
+        'INSERT INTO favorites(user_id,photo_id,created_at) VALUES(?,?,?) ON CONFLICT(user_id,photo_id) DO NOTHING',
+      ).run(req.user.id, photo.id, timestamp());
+    } else
+      db.prepare('DELETE FROM favorites WHERE user_id=? AND photo_id=?').run(
+        req.user.id,
+        req.params.id,
+      );
+    notify(req.user.id, { type: 'favorites-change' });
+    res.json({ favorite: req.body.favorite });
+  });
+  for (const kind of ['file', 'preview', 'thumb', 'download'])
     app.get(
       `/api/photos/:id/${kind}`,
       asyncRoute(async (req, res) => {
+        const download = kind === 'download' || req.query.download !== undefined;
+        if (download && !req.user) throw problem(401, '登录后才能下载照片');
         const photo = db
           .prepare(
             'SELECT p.*, a.user_id, a.is_public FROM photos p JOIN albums a ON a.id=p.album_id WHERE p.id=?',
           )
           .get(req.params.id);
         const isOwner = photo && req.user?.id === photo.user_id;
-        if (!photo || (!isOwner && (!photo.is_public || photo.deleted_at)))
+        if (!photo || (!isOwner && (!photo.is_public || !photo.is_published || photo.deleted_at)))
           throw problem(404, '照片不存在或尚未公开');
-        const filename =
-          kind === 'thumb'
+        if (download && !isOwner && !photo.allow_download)
+          throw problem(403, '作者未开放这张照片的下载许可');
+        const original = isOwner && (kind === 'file' || download);
+        const filename = original
+          ? path.join(dirs.originals, `${photo.id}.${photo.extension}`)
+          : kind === 'thumb' && !download
             ? path.join(dirs.thumbs, `${photo.id}.webp`)
-            : kind === 'file' && isOwner
-              ? path.join(dirs.originals, `${photo.id}.${photo.extension}`)
-              : path.join(dirs.previews, `${photo.id}.webp`);
+            : path.join(dirs.previews, `${photo.id}.webp`);
         res.setHeader('Cache-Control', 'private, no-store');
-        res.setHeader('Content-Type', kind === 'file' && isOwner ? photo.mime : 'image/webp');
-        if (req.query.download === '1') {
-          const original =
-            isOwner && kind === 'file' ? photo.filename : `${path.parse(photo.filename).name}.webp`;
+        res.setHeader('Content-Type', original ? photo.mime : 'image/webp');
+        if (download) {
+          const downloadName = original
+            ? photo.filename
+            : `${path.parse(photo.filename).name}.webp`;
           res.setHeader(
             'Content-Disposition',
-            `attachment; filename="photo.${isOwner && kind === 'file' ? photo.extension : 'webp'}"; filename*=UTF-8''${encodeURIComponent(original).replace(/'/g, '%27')}`,
+            `attachment; filename="photo.${original ? photo.extension : 'webp'}"; filename*=UTF-8''${encodeURIComponent(downloadName).replace(/'/g, '%27')}`,
           );
         }
         res.sendFile(filename, (error) => {
@@ -717,28 +1042,19 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
         });
       }),
     );
-  app.get('/api/public/albums', (_req, res) =>
-    res.json({
-      albums: db
-        .prepare('SELECT * FROM albums WHERE is_public=1 ORDER BY created_at DESC')
-        .all()
-        .map(albumJSON),
-    }),
-  );
+  app.get('/api/public/photos', (req, res) => res.json(readPublicPhotos(req.query, req.user?.id)));
+  app.get('/api/public/photos/:id', (req, res) => {
+    const photo = db
+      .prepare(`${publicPhotoSelect} WHERE p.id=? AND ${publishedCondition}`)
+      .get(req.user?.id || '', req.params.id);
+    if (!photo) throw problem(404, '照片不存在或已撤回公开');
+    res.json({ photo: publicPhotoJSON(photo) });
+  });
+  app.get('/api/public/albums', (_req, res) => res.json({ albums: readPublicAlbums() }));
   app.get('/api/public/albums/:slug', (req, res) => {
-    const album = db
-      .prepare('SELECT * FROM albums WHERE slug=? AND is_public=1')
-      .get(req.params.slug);
-    if (!album) throw problem(404, '作品集不存在或已撤回');
-    res.json({
-      album: albumJSON(album),
-      photos: db
-        .prepare(
-          'SELECT * FROM photos WHERE album_id=? AND deleted_at IS NULL ORDER BY created_at,id',
-        )
-        .all(album.id)
-        .map(photoJSON),
-    });
+    const result = readPublicAlbum(req.params.slug, req.user?.id);
+    if (!result) throw problem(404, '作品集不存在或已撤回');
+    res.json(result);
   });
 
   // The UI only receives analysis hints; it never automatically deletes a photo.
@@ -1048,25 +1364,10 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
     if (status === 503) res.setHeader('Retry-After', '3');
     res.status(status).json({ error: message });
   });
-  app.locals.publicAlbum = (slug) => {
-    const album = db.prepare('SELECT * FROM albums WHERE slug=? AND is_public=1').get(slug);
-    return album
-      ? {
-          album: albumJSON(album),
-          photos: db
-            .prepare(
-              'SELECT * FROM photos WHERE album_id=? AND deleted_at IS NULL ORDER BY created_at,id',
-            )
-            .all(album.id)
-            .map(photoJSON),
-        }
-      : null;
-  };
-  app.locals.publicAlbums = () =>
-    db
-      .prepare('SELECT * FROM albums WHERE is_public=1 ORDER BY created_at DESC')
-      .all()
-      .map(albumJSON);
+  // SSR and JSON APIs share the exact publication filters and DTO whitelist.
+  app.locals.publicAlbum = readPublicAlbum;
+  app.locals.publicAlbums = readPublicAlbums;
+  app.locals.publicPhotos = readPublicPhotos;
   return {
     app,
     async close() {

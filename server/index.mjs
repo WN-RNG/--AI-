@@ -59,34 +59,58 @@ if (existsSync(path.join(dist, 'index.html'))) {
           }),
         );
     const { album, photos } = result;
-    const content = `<main><nav><a href="/explore">光影 · 公开作品</a></nav><h1>${escape(album.title)}</h1><p>${escape(album.description)}</p><p>${escape(album.location)} · ${photos.length} 张作品</p><div>${photos.map((photo) => `<figure><a href="${photo.url}"><img src="${photo.thumbnailUrl}" alt="${escape(photo.filename)}" width="${photo.width}" height="${photo.height}" loading="lazy"></a><figcaption>${escape(photo.filename)}</figcaption></figure>`).join('')}</div></main>`;
+    const content = `<main><nav><a href="/explore">光影 · 公开作品</a></nav><h1>${escape(album.title)}</h1><p>${photos.length} 张公开作品</p><div>${photos.map((photo) => `<figure><a href="${photo.previewUrl}"><img src="${photo.thumbnailUrl}" alt="${escape(photo.filename)}" width="${photo.width}" height="${photo.height}" loading="lazy"></a><figcaption>${escape(photo.filename)} · ${escape(photo.authorName)}</figcaption></figure>`).join('')}</div></main>`;
     res.setHeader('Cache-Control', 'no-store');
     res.type('html').send(
       render(req, {
         title: `${album.title} · 光影作品集`,
-        description: album.description || `${album.title}，共 ${photos.length} 张摄影作品。`,
+        description: `${album.title}，共 ${photos.length} 张公开摄影作品。`,
         content,
         image: album.coverUrl,
       }),
     );
   });
-  app.get('/explore', (req, res) => {
-    const albums = app.locals.publicAlbums();
-    const content = `<main><a href="/">光影</a><h1>发现公开作品</h1>${albums.map((album) => `<article><a href="/p/${escape(album.slug)}">${album.coverUrl ? `<img src="${album.coverUrl}" alt="${escape(album.title)}" width="800" loading="lazy">` : ''}<h2>${escape(album.title)}</h2></a><p>${escape(album.description)}</p></article>`).join('')}</main>`;
+  app.get(['/', '/explore'], (req, res) => {
+    let result;
+    try {
+      result = app.locals.publicPhotos({
+        sort: req.query.sort || 'featured',
+        q: req.query.q,
+        limit: 48,
+      });
+    } catch (error) {
+      const status = error.status >= 400 && error.status < 500 ? error.status : 500;
+      return res
+        .status(status)
+        .type('html')
+        .send(
+          render(req, {
+            title: '图库暂不可用 · 光影',
+            description: '请稍后重试或重新打开图库。',
+            content: '<main><h1>图库暂不可用</h1><a href="/">重新打开图库</a></main>',
+            noindex: true,
+          }),
+        );
+    }
+    const { photos } = result;
+    const content = `<main><a href="/">光影</a><h1>发现摄影作品</h1><p>浏览作者主动发布的照片，发现值得珍藏的光影。</p>${photos.map((photo) => `<figure><a href="/p/${escape(photo.albumSlug)}"><img src="${photo.thumbnailUrl}" alt="${escape(photo.filename)}" width="${photo.width}" height="${photo.height}" loading="lazy"></a><figcaption>${escape(photo.albumTitle)} · ${escape(photo.authorName)}</figcaption></figure>`).join('')}${photos.length ? '' : '<p>当前暂无符合条件的公开作品。</p>'}</main>`;
     res.setHeader('Cache-Control', 'no-store');
-    res.type('html').send(
-      render(req, {
-        title: '发现公开作品 · 光影',
-        description: '发现创作者主动发布的摄影作品集。',
-        content,
-      }),
-    );
+    res
+      .type('html')
+      .send(
+        render(req, {
+          title: '发现摄影作品 · 光影',
+          description: '发现作者主动发布的摄影作品。',
+          content,
+          image: photos[0]?.previewUrl,
+        }),
+      );
   });
   app.get('/robots.txt', (_req, res) =>
     res
       .type('text')
       .send(
-        'User-agent: *\nAllow: /\nDisallow: /api/auth/\nDisallow: /api/albums/\nDisallow: /api/events\nDisallow: /api/trash\nDisallow: /api/demo\nDisallow: /album/\nDisallow: /trash\n',
+        'User-agent: *\nAllow: /\nDisallow: /api/auth/\nDisallow: /api/albums/\nDisallow: /api/events\nDisallow: /api/trash\nDisallow: /api/favorites\nDisallow: /api/demo\nDisallow: /album/\nDisallow: /trash\n',
       ),
   );
   app.use(express.static(dist, { index: false, maxAge: '1h' }));

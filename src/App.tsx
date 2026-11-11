@@ -41,6 +41,7 @@ import type { Album, Photo, PhotoPatch, PublicPhoto, User } from '../shared/type
 import { api, formatDate } from './api';
 import AuthDialog from './components/AuthDialog';
 import HomeCover from './components/HomeCover';
+import MobileNavigation from './components/MobileNavigation';
 import { useI18n } from './i18n';
 import { translateUploadIssue } from './uiTranslations';
 import PublishDialog from './components/PublishDialog';
@@ -1299,13 +1300,11 @@ export default function App() {
           user={user}
           suspended={!!authIntent || !!previewId}
           onExplore={() =>
-            document
-              .getElementById('collection')
-              ?.scrollIntoView({
-                behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
-                  ? 'instant'
-                  : 'smooth',
-              })
+            document.getElementById('collection')?.scrollIntoView({
+              behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                ? 'instant'
+                : 'smooth',
+            })
           }
           onLibrary={() => resetTab('projects')}
           onFavorites={() =>
@@ -1314,7 +1313,7 @@ export default function App() {
           onLogin={(register) => requestLogin('login', undefined, undefined, register)}
         />
       )}
-      <div className="studio-layout" id="collection">
+      <div className="studio-layout" id="collection" data-view={publicView ? 'public' : 'private'}>
         <aside className="studio-sidebar">
           <button
             className="brand"
@@ -1346,7 +1345,7 @@ export default function App() {
               {t('我的相册')}
             </button>
             <button
-              className={!publicView && tab === 'smart' ? 'active' : ''}
+              className={`mobile-library-tool ${!publicView && tab === 'smart' ? 'active' : ''}`}
               onClick={() => resetTab('smart')}
             >
               {t('智能选片')}
@@ -1361,7 +1360,7 @@ export default function App() {
             </button>
             {user && (
               <button
-                className={!publicView && tab === 'trash' ? 'active' : ''}
+                className={`mobile-library-tool ${!publicView && tab === 'trash' ? 'active' : ''}`}
                 onClick={() => resetTab('trash')}
               >
                 {t('回收站')}
@@ -2106,6 +2105,25 @@ export default function App() {
           </footer>
         </div>
       </div>
+      <MobileNavigation
+        home={path === '/'}
+        active={favoritesView ? 'favorites' : publicView ? 'explore' : 'library'}
+        blocked={
+          !!previewId ||
+          !!authIntent ||
+          createOpen ||
+          coverOpen ||
+          publishOpen ||
+          deleteOpen ||
+          !!pendingUpload ||
+          selected.size > 0
+        }
+        onExplore={() => navigate('/explore')}
+        onLibrary={() => resetTab('projects')}
+        onFavorites={() =>
+          user ? navigate('/favorites') : requestLogin('workspace', undefined, 'favorites')
+        }
+      />
       {uploadState && (
         <div className="upload-progress" role="status">
           <div>

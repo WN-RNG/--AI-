@@ -1,13 +1,13 @@
 /** Browser-local postcard rendering. Only four sampled base colours are used for the backdrop. */
 export type RGB = [number, number, number];
 export type PaletteColor = { rgb: RGB; weight: number };
-export type PostcardTemplate = 'A' | 'B' | 'C';
+export type PostcardTemplate = 'frost';
 export type PostcardOrientation = 'auto' | 'landscape' | 'portrait';
 export type PostcardLayout = {
   width: number;
   height: number;
   image: { x: number; y: number; width: number; height: number };
-  mat: { x: number; y: number; width: number; height: number };
+  caption: { x: number; y: number; width: number; height: number };
   captionY: number;
 };
 
@@ -60,23 +60,7 @@ export function extractPalette(pixels: ArrayLike<number>): PaletteColor[] {
   return [...merged.values()].sort((a, b) => b.weight - a.weight).slice(0, 4);
 }
 
-/** A visual recommendation, based on colour and shape; it does not claim to recognise the scene. */
-export function recommendTemplate(
-  palette: PaletteColor[],
-  width: number,
-  height: number,
-): PostcardTemplate {
-  const total = palette.reduce((sum, color) => sum + color.weight, 0) || 1;
-  const brightness =
-    palette.reduce((sum, color) => sum + luminance(color.rgb) * color.weight, 0) / total;
-  const warmth =
-    palette.reduce((sum, color) => sum + (color.rgb[0] - color.rgb[2]) * color.weight, 0) / total;
-  if (brightness < 83) return 'C';
-  if (warmth > 15 || height > width * 1.12) return 'B';
-  return brightness > 143 || warmth < -9 ? 'A' : 'B';
-}
-
-/** Contain the full photo inside the mat, independently of the selected output orientation. */
+/** Follow the photograph when automatic; explicit orientation never crops the original. */
 export function postcardLayout(
   photoWidth: number,
   photoHeight: number,
@@ -90,18 +74,22 @@ export function postcardLayout(
     Number.isFinite(photoHeight)
   ))
     throw new Error('Invalid image size');
-  const portrait =
-    orientation === 'portrait' || (orientation === 'auto' && photoHeight > photoWidth);
   const edge = Math.round(clamp(longEdge, 320, 3600));
-  const width = portrait ? Math.round(edge * 0.8) : edge;
-  const height = portrait ? edge : Math.round((edge * 2) / 3);
-  const padding = Math.min(width, height) * 0.045;
-  const mat = { x: width * 0.07, y: height * 0.065, width: width * 0.86, height: height * 0.87 };
+  const ratio =
+    orientation === 'portrait'
+      ? 0.8
+      : orientation === 'landscape'
+        ? 1.5
+        : clamp(1 / (0.92 / (photoWidth / photoHeight) + 0.155), 0.56, 1.6);
+  const width = ratio >= 1 ? edge : Math.round(edge * ratio);
+  const height = ratio >= 1 ? Math.round(edge / ratio) : edge;
+  const padding = Math.min(width, height) * 0.04;
+  const captionHeight = Math.max(height * 0.075, Math.min(width, height) * 0.12);
   const area = {
-    x: mat.x + padding,
-    y: mat.y + padding,
-    width: mat.width - padding * 2,
-    height: mat.height - padding * 2 - height * 0.135,
+    x: padding,
+    y: padding,
+    width: width - padding * 2,
+    height: height - padding * 2 - captionHeight,
   };
   const fit = Math.min(area.width / photoWidth, area.height / photoHeight);
   const image = {
@@ -110,7 +98,13 @@ export function postcardLayout(
     width: photoWidth * fit,
     height: photoHeight * fit,
   };
-  return { width, height, image, mat, captionY: mat.y + mat.height - height * 0.105 };
+  const caption = {
+    x: padding,
+    y: height - padding - captionHeight,
+    width: width - padding * 2,
+    height: captionHeight,
+  };
+  return { width, height, image, caption, captionY: caption.y + caption.height * 0.45 };
 }
 
 function canvas(width: number, height: number, sample = false) {
@@ -151,13 +145,17 @@ function rgb(color: RGB, alpha = 1) {
 function captionLines(context: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
   const lines: string[] = [];
   let line = '';
-  // Character wrapping also supports Chinese, filenames and long unbroken words.
-  for (const character of Array.from(text.replace(/[\r\n]+/g, ' ').trim()).slice(0, 140)) {
-    if (context.measureText(line + character).width > maxWidth && line) {
-      lines.push(line.trim());
-      line = character;
-    } else line += character;
-    if (lines.length === 2) break;
+  // Keep English words together; a long unbroken word is scaled by Canvas at draw time.
+  for (const word of text
+    .replace(/[\r\n]+/g, ' ')
+    .trim()
+    .slice(0, 140)
+    .split(/\s+/)) {
+    const next = line ? `${line} ${word}` : word;
+    if (context.measureText(next).width > maxWidth && line && lines.length === 0) {
+      lines.push(line);
+      line = word;
+    } else line = next;
   }
   if (lines.length < 2 && line) lines.push(line.trim());
   return lines;
@@ -169,8 +167,6 @@ export type PostcardRenderOptions = {
   longEdge: number;
   palette: PaletteColor[];
   caption: string;
-  author: string;
-  metadata: string;
 };
 
 /** Only the low-resolution backdrop is blurred; the contained photo is drawn afterwards, sharply. */
@@ -184,20 +180,16 @@ export function renderPostcard(
   target.height = layout.height;
   const context = target.getContext('2d', { alpha: false });
   if (!context) throw new Error('Canvas is not available');
-  const { width, height, image: box, mat } = layout;
+  const { width, height, image: box } = layout;
   const unit = Math.min(width, height) / 1000;
-  const dark = options.template === 'C';
-  const paper = options.template === 'B';
   const colors = options.palette.length
     ? options.palette.slice(0, 4)
     : [{ rgb: [210, 205, 191] as RGB, weight: 1 }];
+  const averageLight = colors.reduce((sum, color) => sum + luminance(color.rgb) * color.weight, 0);
+  const dark = averageLight < 140;
   const toned = colors.map(
     ({ rgb: color }) =>
-      color.map((value) =>
-        Math.round(
-          dark ? value * 0.42 : value * (paper ? 0.38 : 0.32) + 255 * (paper ? 0.62 : 0.68),
-        ),
-      ) as RGB,
+      color.map((value) => Math.round(dark ? value * 0.58 : value * 0.68 + 255 * 0.32)) as RGB,
   );
   const background = canvas(320, 240);
   background.context.fillStyle = rgb(toned[0]);
@@ -230,51 +222,45 @@ export function renderPostcard(
   background.element.width = background.element.height = 1;
 
   context.save();
-  context.shadowColor = dark ? '#00000066' : '#342d2633';
-  context.shadowBlur = (paper ? 35 : 52) * unit;
-  context.shadowOffsetY = (paper ? 15 : 20) * unit;
-  context.fillStyle = dark ? '#171e21' : paper ? '#fffaf0' : '#ffffffa8';
-  rounded(context, mat.x, mat.y, mat.width, mat.height, (paper ? 14 : 24) * unit);
+  context.shadowColor = dark ? '#00000055' : '#342d2638';
+  context.shadowBlur = 32 * unit;
+  context.shadowOffsetY = 12 * unit;
+  context.fillStyle = '#ffffff33';
+  rounded(context, box.x, box.y, box.width, box.height, 13 * unit);
   context.fill();
   context.restore();
-  context.strokeStyle = dark ? '#ffffff35' : '#ffffffba';
-  context.lineWidth = 1.5 * unit;
-  rounded(context, mat.x, mat.y, mat.width, mat.height, (paper ? 14 : 24) * unit);
-  context.stroke();
 
   context.save();
-  rounded(context, box.x, box.y, box.width, box.height, (paper ? 8 : 15) * unit);
+  rounded(context, box.x, box.y, box.width, box.height, 13 * unit);
   context.clip();
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
   context.drawImage(image, box.x, box.y, box.width, box.height);
   context.restore();
+  context.strokeStyle = dark ? '#ffffff55' : '#ffffffa8';
+  context.lineWidth = 1.2 * unit;
+  rounded(context, box.x, box.y, box.width, box.height, 13 * unit);
+  context.stroke();
 
-  const textX = mat.x + mat.width * 0.06;
-  const textWidth = mat.width * 0.88;
-  context.fillStyle = dark ? '#f7f2e8' : '#342d26';
-  context.font = `${paper ? 'italic ' : ''}${paper ? '400' : '500'} ${32 * unit}px ${paper ? "'Segoe Print', 'KaiTi', Georgia" : 'Georgia'}, serif`;
+  const textWidth = layout.caption.width * 0.94;
+  let fontSize = 49 * unit;
+  context.fillStyle = dark ? '#fffaf0' : '#2f3836';
+  context.font = `400 ${fontSize}px "Album Blessing", cursive`;
   const lines = captionLines(context, options.caption, textWidth);
-  context.textAlign = paper ? 'left' : 'center';
+  const lineHeight = fontSize * 1.02;
+  const widest = Math.max(1, ...lines.map((line) => context.measureText(line).width));
+  // Long edited blessings still fit without clipping or dropping the last words.
+  if (widest > textWidth) {
+    fontSize *= textWidth / widest;
+    context.font = `400 ${fontSize}px "Album Blessing", cursive`;
+  }
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  const startY =
+    layout.caption.y + layout.caption.height / 2 - ((lines.length - 1) * lineHeight) / 2;
   lines.forEach((line, index) =>
-    context.fillText(
-      line,
-      paper ? textX : width / 2,
-      layout.captionY + index * 35 * unit,
-      textWidth,
-    ),
+    context.fillText(line, width / 2, startY + index * lineHeight, textWidth),
   );
-  context.font = `italic 400 ${22 * unit}px Georgia, 'KaiTi', serif`;
-  context.fillStyle = dark ? '#d9d5cc' : '#6d655c';
-  context.textAlign = 'left';
-  const footerY = mat.y + mat.height - height * 0.025;
-  const author = options.author
-    .trim()
-    .replace(/[\r\n]+/g, ' ')
-    .slice(0, 80);
-  context.fillText(author, textX, footerY, textWidth * 0.46);
-  context.textAlign = 'right';
-  context.fillText(options.metadata, mat.x + mat.width * 0.94, footerY, textWidth * 0.5);
   return layout;
 }
 

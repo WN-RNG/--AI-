@@ -4,8 +4,13 @@ import {
   authorizedPostcardBlob,
   extractPalette,
   postcardLayout,
-  recommendTemplate,
+  renderPostcard,
 } from '../src/postcard.ts';
+import {
+  initialPostcardBlessing,
+  nextPostcardBlessing,
+  postcardBlessings,
+} from '../src/postcardBlessings.ts';
 
 test('palette stays bounded and deterministic, excluding transparent pixels', () => {
   const pixels = [];
@@ -26,11 +31,20 @@ test('palette stays bounded and deterministic, excluding transparent pixels', ()
   assert.equal(extractPalette([120, 120, 120, 255, 120, 120, 120, 255]).length, 1);
 });
 
-test('Auto suggests different styles from brightness, warmth and orientation', () => {
-  assert.equal(recommendTemplate([{ rgb: [30, 35, 50], weight: 1 }], 2000, 1200), 'C');
-  assert.equal(recommendTemplate([{ rgb: [200, 150, 80], weight: 1 }], 2000, 1200), 'B');
-  assert.equal(recommendTemplate([{ rgb: [180, 210, 230], weight: 1 }], 2000, 1200), 'A');
-  assert.equal(recommendTemplate([{ rgb: [180, 210, 230], weight: 1 }], 1200, 2000), 'B');
+test('blessings are deterministic, editable and cycle without repeating the same wish', () => {
+  const first = initialPostcardBlessing('photo-47');
+  assert.equal(first, initialPostcardBlessing('photo-47'));
+  assert.ok(postcardBlessings.includes(first));
+  assert.notEqual(first, nextPostcardBlessing(first));
+  assert.equal(nextPostcardBlessing('My own handwritten wish.'), postcardBlessings[0]);
+  let current = first;
+  const seen = new Set();
+  for (let index = 0; index < postcardBlessings.length; index++) {
+    seen.add(current);
+    current = nextPostcardBlessing(current);
+  }
+  assert.equal(seen.size, postcardBlessings.length);
+  assert.equal(current, first);
 });
 
 test('portrait, landscape, panoramic and tall photos remain fully contained in either card orientation', () => {
@@ -46,9 +60,9 @@ test('portrait, landscape, panoramic and tall photos remain fully contained in e
         const card = postcardLayout(photoWidth, photoHeight, longEdge, orientation);
         assert.equal(Math.max(card.width, card.height), longEdge);
         assert.ok(Math.abs(card.image.width / card.image.height - photoWidth / photoHeight) < 1e-9);
-        assert.ok(card.image.x >= card.mat.x && card.image.y >= card.mat.y);
-        assert.ok(card.image.x + card.image.width <= card.mat.x + card.mat.width);
-        assert.ok(card.image.y + card.image.height < card.captionY);
+        assert.ok(card.image.x > 0 && card.image.y > 0);
+        assert.ok(card.image.x + card.image.width < card.width);
+        assert.ok(card.image.y + card.image.height <= card.caption.y + 0.001);
         assert.ok(card.captionY < card.height);
         assert.ok(Math.abs(card.image.x + card.image.width / 2 - card.width / 2) < 1e-9);
       }
@@ -56,6 +70,76 @@ test('portrait, landscape, panoramic and tall photos remain fully contained in e
   }
   assert.throws(() => postcardLayout(0, 100, 2400, 'auto'));
   assert.throws(() => postcardLayout(Infinity, 100, 2400, 'auto'));
+});
+
+test('frost artwork draws the complete sharp photograph and only the authored blessing', () => {
+  const previousDocument = globalThis.document;
+  const written = [];
+  const draws = [];
+  const stack = [];
+  const context = {
+    filter: 'none',
+    beginPath() {},
+    roundRect() {},
+    clip() {},
+    fill() {},
+    stroke() {},
+    fillRect() {},
+    save() {
+      stack.push(this.filter);
+    },
+    restore() {
+      this.filter = stack.pop();
+    },
+    createRadialGradient() {
+      return { addColorStop() {} };
+    },
+    measureText(text) {
+      return { width: text.length * 18 };
+    },
+    fillText(text) {
+      written.push(text);
+    },
+    drawImage(...args) {
+      draws.push({ args, filter: this.filter });
+    },
+  };
+  const target = { width: 0, height: 0, getContext: () => context };
+  globalThis.document = {
+    createElement: () => ({ width: 0, height: 0, getContext: () => context }),
+  };
+  const image = { width: 6000, height: 4000 };
+  const blessing = 'May you carry a little sunlight into every tomorrow.';
+  try {
+    const layout = renderPostcard(target, image, {
+      template: 'frost',
+      orientation: 'auto',
+      longEdge: 2400,
+      palette: [{ rgb: [50, 90, 100], weight: 1 }],
+      caption: blessing,
+    });
+    assert.equal(written.join(' '), blessing);
+    assert.match(context.font, /Album Blessing/);
+    const photoDraw = draws.find(({ args }) => args[0] === image);
+    assert.equal(photoDraw.filter, 'none');
+    assert.equal(
+      photoDraw.args.length,
+      5,
+      'drawImage uses the full photograph, never a crop rectangle',
+    );
+    assert.deepEqual(photoDraw.args.slice(1), [
+      layout.image.x,
+      layout.image.y,
+      layout.image.width,
+      layout.image.height,
+    ]);
+    assert.ok(
+      layout.image.width > layout.width * 0.9,
+      'automatic landscape artwork gives the photo most of the width',
+    );
+  } finally {
+    globalThis.document = previousDocument;
+  }
 });
 
 test('export fetch uses only the encoded authenticated download endpoint, with redirects rejected', async () => {

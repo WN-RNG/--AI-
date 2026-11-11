@@ -1,18 +1,18 @@
 /** Postcard controls stay local. Export re-checks permission through the authenticated download API. */
 import { useEffect, useRef, useState } from 'react';
-import { Check, Download, LoaderCircle, Sparkles } from 'lucide-react';
+import { Brush, Check, Download, LoaderCircle, RefreshCw } from 'lucide-react';
 import type { Photo } from '../../shared/types';
 import { useI18n } from '../i18n';
 import {
   authorizedPostcardBlob,
   encodePostcard,
   imagePalette,
-  recommendTemplate,
   renderPostcard,
   type PaletteColor,
   type PostcardOrientation,
-  type PostcardTemplate,
 } from '../postcard';
+import { initialPostcardBlessing, nextPostcardBlessing } from '../postcardBlessings';
+import { loadPostcardFont } from '../fontLoading';
 import './PostcardMaker.css';
 
 export type PostcardExportHandler = (photo: Photo, performExport: () => Promise<void>) => void;
@@ -30,15 +30,15 @@ export default function PostcardMaker({
 }) {
   const { language } = useI18n();
   const text = (en: string, zh: string) => (language === 'en' ? en : zh);
-  const [template, setTemplate] = useState<'auto' | PostcardTemplate>('auto');
   const [orientation, setOrientation] = useState<PostcardOrientation>('auto');
-  const [caption, setCaption] = useState(photo.filename.replace(/\.[^.]+$/, '').slice(0, 140));
+  const [caption, setCaption] = useState(() => initialPostcardBlessing(photo.id));
   const [mime, setMime] = useState<'image/png' | 'image/jpeg'>('image/png');
   const [longEdge, setLongEdge] = useState<2400 | 3600>(2400);
   const [source, setSource] = useState<{ image: ImageBitmap; palette: PaletteColor[] } | null>(
     null,
   );
   const [loading, setLoading] = useState(true);
+  const [rendering, setRendering] = useState(false);
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState('');
@@ -46,16 +46,7 @@ export default function PostcardMaker({
   const aliveRef = useRef(true);
   const exportControllerRef = useRef<AbortController | null>(null);
   const exportingRef = useRef(false);
-  const recommended = source
-    ? recommendTemplate(source.palette, source.image.width, source.image.height)
-    : 'B';
-  const selected = template === 'auto' ? recommended : template;
-  const names = {
-    A: text('Airy', '清透'),
-    B: text('Editorial', '画册'),
-    C: text('Cinema', '电影'),
-  };
-  const author = photo.authorName || '';
+  const selected = 'frost' as const;
 
   useEffect(() => {
     aliveRef.current = true;
@@ -97,20 +88,32 @@ export default function PostcardMaker({
 
   useEffect(() => {
     if (!source || !previewRef.current) return;
-    try {
-      renderPostcard(previewRef.current, source.image, {
-        template: selected,
-        orientation,
-        longEdge: 1200,
-        palette: source.palette,
-        caption,
-        author,
-        metadata: `DISPLAY ${source.image.width} × ${source.image.height}`,
-      });
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : text('Preview failed.', '预览失败。'));
-    }
-  }, [source, selected, orientation, caption, author]);
+    let cancelled = false;
+    setRendering(true);
+    void (async () => {
+      try {
+        await loadPostcardFont(caption);
+        if (cancelled || !previewRef.current) return;
+        renderPostcard(previewRef.current, source.image, {
+          template: selected,
+          orientation,
+          longEdge: 1200,
+          palette: source.palette,
+          caption,
+        });
+      } catch (reason) {
+        if (!cancelled)
+          setError(
+            reason instanceof Error ? reason.message : text('Preview failed.', '预览失败。'),
+          );
+      } finally {
+        if (!cancelled) setRendering(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [source, orientation, caption]);
 
   function requestExport() {
     if (!source || !downloadAllowed || exportingRef.current) return;
@@ -121,7 +124,6 @@ export default function PostcardMaker({
       longEdge,
       palette: source.palette,
       caption,
-      author,
     };
     const perform = async () => {
       if (!aliveRef.current || exportingRef.current) return;
@@ -135,6 +137,8 @@ export default function PostcardMaker({
       let canvas: HTMLCanvasElement | undefined;
       let objectUrl = '';
       try {
+        await loadPostcardFont(settings.caption);
+        if (!aliveRef.current || controller.signal.aborted) return;
         const blob = await authorizedPostcardBlob(photo.id, controller.signal);
         if (!aliveRef.current || controller.signal.aborted) return;
         const fit = Math.min(1, longEdge / Math.max(photo.width, photo.height, 1));
@@ -151,10 +155,7 @@ export default function PostcardMaker({
         );
         if (!aliveRef.current || controller.signal.aborted) return;
         canvas = document.createElement('canvas');
-        renderPostcard(canvas, image, {
-          ...settings,
-          metadata: `${longEdge} px · ${mime === 'image/png' ? 'PNG' : 'JPEG'}`,
-        });
+        renderPostcard(canvas, image, settings);
         const result = await encodePostcard(canvas, mime);
         if (!aliveRef.current || controller.signal.aborted) return;
         objectUrl = URL.createObjectURL(result);
@@ -205,12 +206,9 @@ export default function PostcardMaker({
           )}
           <canvas
             ref={previewRef}
-            hidden={!source}
+            hidden={!source || loading}
             role="img"
-            aria-label={text(
-              `Postcard preview · ${names[selected]}`,
-              `明信片预览 · ${names[selected]}`,
-            )}
+            aria-label={text('Postcard preview · Immersive frost', '明信片预览 · 沉浸磨砂')}
           />
         </div>
         <p className="pc-preview-note">
@@ -226,60 +224,64 @@ export default function PostcardMaker({
           <h3>{text('A moment, framed.', '为此刻装裱。')}</h3>
         </div>
         <div className="pc-field-label">{text('Style', '选择样式')}</div>
-        <button
-          type="button"
-          className={`pc-auto ${template === 'auto' ? 'is-selected' : ''}`}
-          aria-pressed={template === 'auto'}
-          onClick={() => setTemplate('auto')}
-        >
-          <Sparkles size={17} />
-          <span>
-            Auto{' '}
-            <small>
-              · {recommended} {names[recommended]}
-            </small>
-          </span>
-          {template === 'auto' && <Check size={16} />}
-        </button>
-        <p className="pc-auto-note">
-          {text(
-            'Suggested from colour, brightness and photo shape.',
-            '根据色彩、明暗和照片比例推荐。',
-          )}
-        </p>
         <div
           className="pc-template-options"
           role="group"
           aria-label={text('Choose a template', '选择明信片模板')}
         >
-          {(['A', 'B', 'C'] as const).map((id) => (
-            <button
-              type="button"
-              key={id}
-              className={`pc-template pc-template-${id} ${template === id ? 'is-selected' : ''}`}
-              onClick={() => setTemplate(id)}
-              aria-pressed={template === id}
-            >
-              <span className="pc-template-thumb">
-                <img src={photo.thumbnailUrl} alt="" />
-              </span>
-              <span className="pc-template-name">
-                {id} · {names[id]}
-              </span>
-              <span className="pc-template-tag">
-                {id === recommended ? text('Recommended', '推荐') : '\u00a0'}
-              </span>
-            </button>
-          ))}
+          <button
+            type="button"
+            className="pc-template pc-template-frost is-selected"
+            aria-pressed="true"
+          >
+            <span className="pc-template-thumb">
+              <img src={photo.thumbnailUrl} alt="" />
+            </span>
+            <span className="pc-template-name">{text('Immersive frost', '沉浸磨砂')}</span>
+            <span className="pc-template-tag">
+              <Check size={13} /> {text('On your device', '本地生成')}
+            </span>
+          </button>
+          <button
+            type="button"
+            className="pc-template pc-template-watercolor"
+            disabled
+            aria-describedby="pc-watercolor-note"
+          >
+            <span className="pc-template-thumb">
+              <Brush size={27} />
+            </span>
+            <span className="pc-template-name">{text('Watercolor art', '水彩艺术')}</span>
+            <span className="pc-template-tag">{text('Coming later', '待接入')}</span>
+          </button>
+        </div>
+        <p id="pc-watercolor-note" className="pc-style-note">
+          {text(
+            'True watercolor painting will be available after an image model is connected.',
+            '真实水彩转绘将在接入图像模型后开放。',
+          )}
+        </p>
+        <div className="pc-blessing-heading">
+          <span>{text('A wish for this moment', '为此刻写一句祝福')}</span>
+          <button
+            type="button"
+            className="pc-another-blessing"
+            onClick={() => setCaption(nextPostcardBlessing(caption))}
+          >
+            <RefreshCw size={15} />
+            {text('Another wish', '换一句')}
+          </button>
         </div>
         <label className="pc-field">
-          <span>{text('Caption', '明信片寄语')}</span>
+          <span className="sr-only">{text('English blessing', '英文祝福语')}</span>
           <textarea
             value={caption}
             maxLength={140}
             rows={3}
+            lang="en"
+            spellCheck
             onChange={(event) => setCaption(event.target.value)}
-            placeholder={text('Write something to keep…', '写下你想留住的话…')}
+            placeholder={text('Write a wish in your own words…', '写下你自己的英文祝福…')}
           />
           <small>{caption.length} / 140</small>
         </label>
@@ -339,11 +341,13 @@ export default function PostcardMaker({
             {notice}
           </p>
         )}
+      </aside>
+      <div className="pc-save-bar">
         <button
           type="button"
           className="pc-export"
           onClick={requestExport}
-          disabled={!source || !downloadAllowed || exporting}
+          disabled={!source || !downloadAllowed || exporting || loading || rendering}
         >
           {exporting ? <LoaderCircle size={18} className="pp-spin" /> : <Download size={18} />}
           {exporting ? text('Preparing…', '正在生成…') : text('Export postcard', '导出明信片')}
@@ -354,7 +358,7 @@ export default function PostcardMaker({
             '在你的设备中生成，不调用 AI 服务，不产生额外费用。',
           )}
         </p>
-      </aside>
+      </div>
     </section>
   );
 }

@@ -2047,3 +2047,301 @@
     min-height: 260px;
   }
 }
+
+/* 手机端把信息改成可收起的底部面板，优先把可用高度留给照片。 */
+.pp-information-dismiss,
+.pp-mobile-details-top {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .pp-overlay {
+    padding: 0;
+    background: #f4f0e7;
+  }
+
+  .pp-overlay .pp-shell {
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    overflow: hidden;
+  }
+
+  .pp-header {
+    min-height: 0;
+    padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 10px
+      max(12px, env(safe-area-inset-left));
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .pp-title-area {
+    flex: 1;
+    display: flex;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0;
+    min-width: 0;
+  }
+
+  .pp-title-area .pp-eyebrow {
+    display: none;
+  }
+
+  .pp-title-area h2 {
+    max-width: 100%;
+    font-size: 17px;
+    line-height: 1.4;
+  }
+
+  .pp-position {
+    display: block;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .pp-header-actions {
+    gap: 0;
+  }
+
+  .pp-header-actions .pp-icon-button,
+  .pp-cover-button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .pp-mode-switch {
+    order: 3;
+    flex: 1 0 100%;
+    padding: 3px;
+    margin: 0;
+    border-radius: 12px;
+  }
+
+  .pp-mode-switch button {
+    min-height: 40px;
+    padding: 6px 12px;
+    font-size: 16px;
+  }
+
+  .pp-body {
+    display: block;
+    overflow: hidden;
+  }
+
+  .pp-view-area {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    flex: 1 1 0;
+  }
+
+  .pp-stage {
+    inset: 8px 8px 36px;
+    overscroll-behavior: contain;
+  }
+
+  .pp-navigation {
+    width: 40px;
+    min-width: 40px;
+    height: 44px;
+    top: calc(50% - 22px);
+    background: #fffdf4c9;
+  }
+
+  .pp-previous {
+    left: 8px;
+  }
+
+  .pp-next {
+    right: 8px;
+  }
+
+  .pp-image-caption {
+    bottom: 6px;
+    left: 16px;
+    right: 16px;
+    font-size: 14px;
+    gap: 10px;
+    line-height: 1.5;
+  }
+
+  .pp-image-caption span:first-child {
+    max-width: 62%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .pp-image-caption span:last-child {
+    font-size: 14px;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+
+  .pp-information-dismiss {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    border: 0;
+    border-radius: 0;
+    background: #3f382f25;
+  }
+
+  .pp-information {
+    position: absolute;
+    z-index: 4;
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    width: 100%;
+    min-height: 0;
+    max-height: calc(100% - 16px);
+    padding: 10px max(20px, env(safe-area-inset-right)) 24px max(20px, env(safe-area-inset-left));
+    border: 1px solid #e8e1d4;
+    border-bottom: 0;
+    border-radius: 22px 22px 0 0;
+    background: #fffdf9;
+    box-shadow: 0 -10px 40px #302c1f20;
+    overscroll-behavior: contain;
+  }
+
+  .pp-mobile-details-top {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-height: 36px;
+    margin: 0 -8px 2px;
+  }
+
+  .pp-mobile-details-top .pp-icon-button {
+    margin-left: auto;
+    width: 44px;
+    height: 44px;
+  }
+
+  .pp-sheet-grip {
+    position: absolute;
+    left: calc(50% - 18px);
+    top: 5px;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: #d6cebd;
+  }
+
+  .pp-information .pp-panel-heading {
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+  }
+
+  .pp-information dl {
+    grid-template-columns: 1fr;
+    row-gap: 14px;
+  }
+
+  .pp-information dl > div {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .pp-information dd {
+    text-align: right;
+  }
+
+  .pp-toolbar {
+    min-height: 0;
+    padding: 2px max(8px, env(safe-area-inset-right)) 2px max(8px, env(safe-area-inset-left));
+    gap: 0;
+    flex-shrink: 0;
+  }
+
+  .pp-zoom-controls {
+    flex: 1 0 100%;
+    justify-content: center;
+    min-height: 44px;
+    height: 44px;
+  }
+
+  .pp-zoom-controls .pp-icon-button {
+    min-width: 44px;
+    width: 44px;
+    height: 44px;
+  }
+
+  .pp-zoom-controls .pp-divider {
+    margin-inline: 5px;
+  }
+
+  .pp-zoom-controls .pp-fit-button {
+    height: 44px;
+    padding-inline: 8px;
+  }
+
+  .pp-selection-controls {
+    display: flex;
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    min-width: 0;
+    min-height: 46px;
+    padding: 2px 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .pp-selection-controls::-webkit-scrollbar {
+    display: none;
+  }
+
+  .pp-selection-controls .pp-rating {
+    flex: 0 0 auto;
+    margin: 0 auto 0 0;
+  }
+
+  .pp-overlay .pp-selection-controls .pp-star,
+  .pp-selection-controls .pp-pick-button,
+  .pp-selection-controls .pp-delete {
+    flex: 0 0 auto;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .pp-pick-button > span {
+    display: none;
+  }
+
+  .pp-selection-controls .pp-rating-divider {
+    display: none;
+  }
+
+  .pp-filmstrip-area {
+    padding: 8px max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+    flex-shrink: 0;
+  }
+
+  .pp-filmstrip-label {
+    display: none;
+  }
+
+  .pp-thumbnail {
+    width: 64px;
+    height: 44px;
+    flex-shrink: 0;
+  }
+
+  .pp-confirm {
+    max-width: calc(100vw - 32px);
+    padding: 24px;
+  }
+}

@@ -564,7 +564,7 @@ html[lang='zh-CN'] .collection-heading h1 {
   min-width: 0;
 }
 .editorial-app .photo-meta .filename {
-  font-family: Georgia, 'Songti SC', serif;
+  font-family: 'Album Caslon', 'Songti SC', 'SimSun', serif;
   font-size: 18px;
   line-height: 1.45;
   font-weight: 400;
@@ -580,7 +580,7 @@ html[lang='zh-CN'] .collection-heading h1 {
 .editorial-app .photo-meta time {
   color: #746857;
   font:
-    italic 14px/1.6 Georgia,
+    italic 14px/1.6 'Album Caslon',
     'Songti SC',
     serif;
   margin: 3px 0 0;

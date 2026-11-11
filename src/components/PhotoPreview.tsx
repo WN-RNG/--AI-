@@ -62,6 +62,11 @@ type PublicPhoto = Photo & {
 
 type Point = { x: number; y: number };
 const ZERO: Point = { x: 0, y: 0 };
+const MOBILE_VIEWER = '(max-width: 760px)';
+
+type ViewGesture =
+  | { type: 'pan' | 'swipe'; origin: Point; pan: Point; startedAt: number }
+  | { type: 'pinch'; anchor: Point; distance: number; zoom: number; pan: Point };
 
 function formatBytes(bytes: number) {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -124,7 +129,8 @@ export function PhotoPreview({
   const downloadAllowed = isCurrentOwner || publicPhoto?.allowDownload === true;
   const displayUrl = current?.previewUrl || current?.thumbnailUrl || '';
   const activeIndex = current ? available.findIndex((photo) => photo.id === current.id) : -1;
-  const [showInfo, setShowInfo] = useState(true);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia(MOBILE_VIEWER).matches);
+  const [showInfo, setShowInfo] = useState(() => !window.matchMedia(MOBILE_VIEWER).matches);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>(ZERO);
   const [size, setSize] = useState({ width: 1, height: 1 });
@@ -141,11 +147,15 @@ export function PhotoPreview({
   const dialogRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const infoToggleRef = useRef<HTMLButtonElement>(null);
   const deleteRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const thumbnailRefs = useRef(new Map<string, HTMLButtonElement>());
-  const dragRef = useRef<{ pointerId: number; start: Point; pan: Point } | null>(null);
+  const pointersRef = useRef(new Map<number, Point>());
+  const gestureRef = useRef<ViewGesture | null>(null);
+  const viewRef = useRef({ zoom, pan });
+  viewRef.current = { zoom, pan };
   const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   const wheelHandlerRef = useRef<(event: WheelEvent) => void>(() => undefined);
   const lastNotifiedIdRef = useRef<string | null>(null);
@@ -179,22 +189,40 @@ export function PhotoPreview({
 
   function changeZoom(next: number, anchor: Point = ZERO) {
     const value = Math.min(maxZoom, Math.max(1, next));
-    const ratio = value / zoom;
-    setPan(
-      limitPan(
-        {
-          x: anchor.x - (anchor.x - pan.x) * ratio,
-          y: anchor.y - (anchor.y - pan.y) * ratio,
-        },
-        value,
-      ),
+    const view = viewRef.current;
+    const ratio = value / view.zoom;
+    const nextPan = limitPan(
+      {
+        x: anchor.x - (anchor.x - view.pan.x) * ratio,
+        y: anchor.y - (anchor.y - view.pan.y) * ratio,
+      },
+      value,
     );
+    viewRef.current = { zoom: value, pan: nextPan };
+    setPan(nextPan);
     setZoom(value);
   }
 
   function resetView() {
+    viewRef.current = { zoom: 1, pan: ZERO };
     setZoom(1);
     setPan(ZERO);
+  }
+
+  function closeInformation() {
+    setShowInfo(false);
+    infoToggleRef.current?.focus();
+  }
+
+  function clearGesture() {
+    gestureRef.current = null;
+    const pointers = Array.from(pointersRef.current.keys());
+    pointersRef.current.clear();
+    setDragging(false);
+    for (const pointerId of pointers) {
+      if (stageRef.current?.hasPointerCapture(pointerId))
+        stageRef.current.releasePointerCapture(pointerId);
+    }
   }
 
   function navigate(offset: number) {
@@ -264,6 +292,7 @@ export function PhotoPreview({
     if (event.key === 'Escape') {
       event.preventDefault();
       if (confirming) cancelDelete();
+      else if (isMobile && showInfo && mode === 'view') closeInformation();
       else onClose();
       return;
     }
@@ -354,18 +383,34 @@ export function PhotoPreview({
   useEffect(() => {
     resetView();
     setError('');
-    setDragging(false);
-    dragRef.current = null;
+    clearGesture();
   }, [current?.id, displayUrl]);
+
+  useEffect(() => {
+    const query = window.matchMedia(MOBILE_VIEWER);
+    const update = () => setIsMobile(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    setShowInfo(!isMobile);
+  }, [isMobile]);
+
+  useEffect(() => {
+    clearGesture();
+  }, [mode, isInteractionBlocked]);
 
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
-    const updateSize = () =>
+    const updateSize = () => {
+      const margin = window.matchMedia(MOBILE_VIEWER).matches ? 16 : 32;
       setSize({
-        width: Math.max(1, stage.clientWidth - 32),
-        height: Math.max(1, stage.clientHeight - 32),
+        width: Math.max(1, stage.clientWidth - margin),
+        height: Math.max(1, stage.clientHeight - margin),
       });
+    };
     updateSize();
     const observer = new ResizeObserver(updateSize);
     observer.observe(stage);
@@ -378,7 +423,11 @@ export function PhotoPreview({
   }, []);
 
   useEffect(() => {
-    setPan((previous) => limitPan(previous));
+    setPan((previous) => {
+      const nextPan = limitPan(previous);
+      viewRef.current = { ...viewRef.current, pan: nextPan };
+      return nextPan;
+    });
   }, [size.width, size.height, imageWidth, imageHeight]);
 
   useEffect(() => {
@@ -393,32 +442,120 @@ export function PhotoPreview({
   }, [confirming]);
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0 || !loaded || broken || zoom <= 1 || isInteractionBlocked) return;
+    if (
+      event.button !== 0 ||
+      !loaded ||
+      broken ||
+      isInteractionBlocked ||
+      (event.target as HTMLElement).closest('button, a') ||
+      pointersRef.current.size >= 2
+    )
+      return;
+    const view = viewRef.current;
+    if (event.pointerType === 'mouse' && view.zoom <= 1) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = {
-      pointerId: event.pointerId,
-      start: { x: event.clientX, y: event.clientY },
-      pan,
-    };
-    setDragging(true);
+    const point = { x: event.clientX, y: event.clientY };
+    pointersRef.current.set(event.pointerId, point);
+    if (pointersRef.current.size === 2) {
+      const [first, second] = Array.from(pointersRef.current.values());
+      const bounds = event.currentTarget.getBoundingClientRect();
+      gestureRef.current = {
+        type: 'pinch',
+        distance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)),
+        anchor: {
+          x: (first.x + second.x) / 2 - bounds.left - bounds.width / 2,
+          y: (first.y + second.y) / 2 - bounds.top - bounds.height / 2,
+        },
+        zoom: view.zoom,
+        pan: view.pan,
+      };
+    } else {
+      gestureRef.current = {
+        type: view.zoom > 1.01 ? 'pan' : 'swipe',
+        origin: point,
+        pan: view.pan,
+        startedAt: performance.now(),
+      };
+    }
+    setDragging(view.zoom > 1.01 || pointersRef.current.size === 2);
   }
 
   function moveDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    setPan(
-      limitPan({
-        x: drag.pan.x + event.clientX - drag.start.x,
-        y: drag.pan.y + event.clientY - drag.start.y,
-      }),
-    );
+    if (!pointersRef.current.has(event.pointerId) || isInteractionBlocked) return;
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.type === 'swipe') return;
+    if (gesture.type === 'pinch') {
+      const [first, second] = Array.from(pointersRef.current.values());
+      if (!first || !second) return;
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const nextZoom = Math.max(
+        1,
+        Math.min(
+          maxZoom,
+          (gesture.zoom * Math.hypot(second.x - first.x, second.y - first.y)) / gesture.distance,
+        ),
+      );
+      const ratio = nextZoom / gesture.zoom;
+      const nextPan = limitPan(
+        {
+          x:
+            (first.x + second.x) / 2 -
+            bounds.left -
+            bounds.width / 2 -
+            (gesture.anchor.x - gesture.pan.x) * ratio,
+          y:
+            (first.y + second.y) / 2 -
+            bounds.top -
+            bounds.height / 2 -
+            (gesture.anchor.y - gesture.pan.y) * ratio,
+        },
+        nextZoom,
+      );
+      viewRef.current = { zoom: nextZoom, pan: nextPan };
+      setZoom(nextZoom);
+      setPan(nextPan);
+    } else {
+      const nextPan = limitPan(
+        {
+          x: gesture.pan.x + event.clientX - gesture.origin.x,
+          y: gesture.pan.y + event.clientY - gesture.origin.y,
+        },
+        viewRef.current.zoom,
+      );
+      viewRef.current = { ...viewRef.current, pan: nextPan };
+      setPan(nextPan);
+    }
   }
 
   function endDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    if (dragRef.current?.pointerId !== event.pointerId) return;
-    dragRef.current = null;
-    setDragging(false);
+    if (!pointersRef.current.has(event.pointerId)) return;
+    const gesture = gestureRef.current;
+    pointersRef.current.delete(event.pointerId);
+    if (pointersRef.current.size === 1) {
+      // 抬起一根手指后继续平移，不把刚才的双指动作误判成换图。
+      gestureRef.current = {
+        type: 'pan',
+        origin: Array.from(pointersRef.current.values())[0],
+        pan: viewRef.current.pan,
+        startedAt: performance.now(),
+      };
+    } else {
+      gestureRef.current = null;
+      setDragging(false);
+      if (gesture?.type === 'swipe' && event.type === 'pointerup') {
+        const dx = event.clientX - gesture.origin.x;
+        const dy = event.clientY - gesture.origin.y;
+        const threshold = Math.min(90, Math.max(44, size.width * 0.16));
+        if (
+          Math.abs(dx) >= threshold &&
+          Math.abs(dx) > Math.abs(dy) * 1.4 &&
+          performance.now() - gesture.startedAt < 1200
+        )
+          navigate(dx < 0 ? 1 : -1);
+      }
+    }
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
   }
@@ -545,6 +682,7 @@ export function PhotoPreview({
             {mode === 'view' && (
               <button
                 className={`pp-icon-button ${showInfo ? 'is-active' : ''}`}
+                ref={infoToggleRef}
                 onClick={() => setShowInfo(!showInfo)}
                 aria-pressed={showInfo}
                 aria-expanded={showInfo}
@@ -590,6 +728,7 @@ export function PhotoPreview({
               onPointerMove={moveDrag}
               onPointerUp={endDrag}
               onPointerCancel={endDrag}
+              onLostPointerCapture={endDrag}
               onDoubleClick={(event) => {
                 const bounds = event.currentTarget.getBoundingClientRect();
                 changeZoom(zoom > 1.01 ? 1 : Math.max(2, 1 / fitScale), {
@@ -680,99 +819,119 @@ export function PhotoPreview({
           </div>
 
           {showInfo && (
-            <aside className="pp-information" id="pp-information" aria-label={t('照片信息')}>
-              <div className="pp-panel-heading">
-                <span>{t('照片信息')}</span>
-                <span>DETAILS</span>
-              </div>
-              <div className="pp-info-preview">
-                <img src={current.thumbnailUrl} alt="" />
-              </div>
-              <h3>{readOnly ? publicPhoto?.title || current.filename : current.filename}</h3>
-              {readOnly && (
-                <div className="pp-public-context">
-                  <span className="pp-author-name">{publicPhoto?.authorName || t('创作者')}</span>
-                  {onNavigateAlbum ? (
-                    <button
-                      type="button"
-                      className="pp-album-link"
-                      onClick={() => onNavigateAlbum(current)}
-                    >
-                      <FolderOpen size={14} />
-                      <span>{publicPhoto?.albumTitle || t('查看所属相册')}</span>
-                      <ChevronRight size={13} />
-                    </button>
-                  ) : (
-                    publicPhoto?.albumTitle && (
-                      <span className="pp-album-name">{publicPhoto.albumTitle}</span>
-                    )
+            <>
+              <button
+                type="button"
+                className="pp-information-dismiss"
+                aria-label={t('隐藏照片信息')}
+                onClick={closeInformation}
+                tabIndex={-1}
+              />
+              <aside className="pp-information" id="pp-information" aria-label={t('照片信息')}>
+                <div className="pp-mobile-details-top">
+                  <span className="pp-sheet-grip" aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="pp-icon-button"
+                    onClick={closeInformation}
+                    aria-label={t('隐藏照片信息')}
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+                <div className="pp-panel-heading">
+                  <span>{t('照片信息')}</span>
+                  <span>DETAILS</span>
+                </div>
+                <div className="pp-info-preview">
+                  <img src={current.thumbnailUrl} alt="" />
+                </div>
+                <h3>{readOnly ? publicPhoto?.title || current.filename : current.filename}</h3>
+                {readOnly && (
+                  <div className="pp-public-context">
+                    <span className="pp-author-name">{publicPhoto?.authorName || t('创作者')}</span>
+                    {onNavigateAlbum ? (
+                      <button
+                        type="button"
+                        className="pp-album-link"
+                        onClick={() => onNavigateAlbum(current)}
+                      >
+                        <FolderOpen size={14} />
+                        <span>{publicPhoto?.albumTitle || t('查看所属相册')}</span>
+                        <ChevronRight size={13} />
+                      </button>
+                    ) : (
+                      publicPhoto?.albumTitle && (
+                        <span className="pp-album-name">{publicPhoto.albumTitle}</span>
+                      )
+                    )}
+                    <p className="pp-download-permission">
+                      {isCurrentOwner
+                        ? t('你是作品作者，可下载自己的原图')
+                        : downloadAllowed
+                          ? t('作者允许登录后下载展示图')
+                          : t('作者未开放下载')}
+                    </p>
+                  </div>
+                )}
+                <dl>
+                  <div>
+                    <dt>{readOnly ? t('展示图尺寸') : t('分辨率')}</dt>
+                    <dd>{displayedDimensions}</dd>
+                  </div>
+                  {!readOnly && (
+                    <>
+                      <div>
+                        <dt>{t('文件大小')}</dt>
+                        <dd>{formatBytes(current.bytes)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t('文件格式')}</dt>
+                        <dd>{current.mime.split('/')[1]?.toUpperCase() ?? current.mime}</dd>
+                      </div>
+                      <div>
+                        <dt>{t('拍摄时间')}</dt>
+                        <dd>{formatDate(current.capturedAt, language)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t('上传时间')}</dt>
+                        <dd>{formatDate(current.createdAt, language)}</dd>
+                      </div>
+                    </>
                   )}
-                  <p className="pp-download-permission">
-                    {isCurrentOwner
-                      ? t('你是作品作者，可下载自己的原图')
-                      : downloadAllowed
-                        ? t('作者允许登录后下载展示图')
-                        : t('作者未开放下载')}
-                  </p>
-                </div>
-              )}
-              <dl>
-                <div>
-                  <dt>{readOnly ? t('展示图尺寸') : t('分辨率')}</dt>
-                  <dd>{displayedDimensions}</dd>
-                </div>
+                </dl>
                 {!readOnly && (
                   <>
-                    <div>
-                      <dt>{t('文件大小')}</dt>
-                      <dd>{formatBytes(current.bytes)}</dd>
+                    <div className="pp-info-rule" />
+                    <div className="pp-info-section-label">{t('选片状态')}</div>
+                    <div className={`pp-status pp-status-${current.pick}`}>
+                      {current.pick === 'keep' ? (
+                        <>
+                          <Check size={14} />
+                          {t(' 已保留')}
+                        </>
+                      ) : current.pick === 'reject' ? (
+                        <>
+                          <X size={14} />
+                          {t(' 待淘汰')}
+                        </>
+                      ) : (
+                        t('尚未标记')
+                      )}
                     </div>
-                    <div>
-                      <dt>{t('文件格式')}</dt>
-                      <dd>{current.mime.split('/')[1]?.toUpperCase() ?? current.mime}</dd>
-                    </div>
-                    <div>
-                      <dt>{t('拍摄时间')}</dt>
-                      <dd>{formatDate(current.capturedAt, language)}</dd>
-                    </div>
-                    <div>
-                      <dt>{t('上传时间')}</dt>
-                      <dd>{formatDate(current.createdAt, language)}</dd>
+                    <div className="pp-info-section-label">{t('分析提示')}</div>
+                    <div className="pp-analysis-tags">
+                      {current.duplicateOf && <span>{t('检测到重复文件')}</span>}
+                      {current.groupId && <span>{t('属于相似照片组')}</span>}
+                      {current.blur && <span>{t('疑似模糊 · 请人工确认')}</span>}
+                      {!current.duplicateOf && !current.groupId && !current.blur && (
+                        <p>{t('暂无需要关注的分析提示')}</p>
+                      )}
                     </div>
                   </>
                 )}
-              </dl>
-              {!readOnly && (
-                <>
-                  <div className="pp-info-rule" />
-                  <div className="pp-info-section-label">{t('选片状态')}</div>
-                  <div className={`pp-status pp-status-${current.pick}`}>
-                    {current.pick === 'keep' ? (
-                      <>
-                        <Check size={14} />
-                        {t(' 已保留')}
-                      </>
-                    ) : current.pick === 'reject' ? (
-                      <>
-                        <X size={14} />
-                        {t(' 待淘汰')}
-                      </>
-                    ) : (
-                      t('尚未标记')
-                    )}
-                  </div>
-                  <div className="pp-info-section-label">{t('分析提示')}</div>
-                  <div className="pp-analysis-tags">
-                    {current.duplicateOf && <span>{t('检测到重复文件')}</span>}
-                    {current.groupId && <span>{t('属于相似照片组')}</span>}
-                    {current.blur && <span>{t('疑似模糊 · 请人工确认')}</span>}
-                    {!current.duplicateOf && !current.groupId && !current.blur && (
-                      <p>{t('暂无需要关注的分析提示')}</p>
-                    )}
-                  </div>
-                </>
-              )}
-            </aside>
+              </aside>
+            </>
           )}
         </div>
 
@@ -896,7 +1055,15 @@ export function PhotoPreview({
               </button>
             </div>
           )}
-          {readOnly && <span className="pp-view-hint">{t('滚轮缩放 · 双击查看细节')}</span>}
+          {readOnly && (
+            <span className="pp-view-hint">
+              {isMobile
+                ? language === 'en'
+                  ? 'Swipe to browse · Pinch to zoom'
+                  : '左右滑动浏览 · 双指缩放'
+                : t('滚轮缩放 · 双击查看细节')}
+            </span>
+          )}
         </div>
 
         <footer className="pp-filmstrip-area" hidden={mode !== 'view'}>

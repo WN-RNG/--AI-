@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-11T07:59:19.283241+00:00",
+  "slides": [
+    {
+      "id": "original-autumn",
+      "url": "/covers/original-autumn.webp",
+      "title": "STILL MOMENTS",
+      "author": "光影 · Original artwork",
+      "source": "",
+      "credit": "Original illustrative artwork · AI generated",
+      "displayOnly": true,
+      "focalPoint": {
+        "x": 50,
+        "y": 50
+      }
+    },
+    {
+      "id": "original-alpine",
+      "url": "/covers/original-alpine.webp",
+      "title": "LIGHT",
+      "author": "光影 · Original artwork",
+      "source": "",
+      "credit": "Original illustrative artwork · AI generated",
+      "displayOnly": true,
+      "focalPoint": {
+        "x": 50,
+        "y": 50
+      }
+    },
+    {
+      "id": "original-coast",
+      "url": "/covers/original-coast.webp",
+      "title": "AFTERGLOW",
+      "author": "光影 · Original artwork",
+      "source": "",
+      "credit": "Original illustrative artwork · AI generated",
+      "displayOnly": true,
+      "focalPoint": {
+        "x": 50,
+        "y": 50
+      }
+    },
+    {
+      "id": "500px-NWupKlOwBD",
+      "displayOnly": true,
+      "title": "Autumn",
+      "subtitle": "",
+      "author": "Paolo Deri",
+      "credit": "Photography by Paolo Deri · 500px",
+      "source": "https://500px.com/photo/NWupKlOwBD",
+      "focalPoint": {
+        "x": 50,
+        "y": 50
+      },
+      "url": "/covers/b4fb3593222b363911831772.webp",
+      "width": 1024,
+      "height": 547
+    },
+    {
+      "id": "500px-0cqVHQJcfJ",
+      "displayOnly": true,
+      "title": "The Sound of Silence",
+      "subtitle": "",
+      "author": "Ryan Kole",
+      "credit": "Photography by Ryan Kole · 500px",
+      "source": "https://500px.com/photo/0cqVHQJcfJ",
+      "focalPoint": {
+        "x": 50,
+        "y": 50
+      },
+      "url": "/covers/1bc0f54a5339ac28b987c421.webp",
+      "width": 1024,
+      "height": 683
+    },
+    {
+      "id": "500px-azr5g9wWvH",
+      "displayOnly": true,
+      "title": "Sunset at Bamford Edge",
+      "subtitle": "",
+      "author": "Chris Owens",
+      "credit": "Photography by Chris Owens · 500px",
+      "source": "https://500px.com/photo/azr5g9wWvH",
+      "focalPoint": {
+        "x": 50,
+        "y": 50
+      },
+      "url": "/covers/4a1e05d3385a9f7ff116489e.webp",
+      "width": 1024,
+      "height": 680
+    },
+    {
+      "id": "500px-Vv0AVtnjwD",
+      "displayOnly": true,
+      "title": "loch chon",
+      "subtitle": "",
+      "author": "Alexey Malashin",
+      "credit": "Photography by Alexey Malashin · 500px",
+      "source": "https://500px.com/photo/Vv0AVtnjwD",
+      "focalPoint": {
+        "x": 50,
+        "y": 50
+      },
+      "url": "/covers/a62eac41c69df5bfb03aca90.webp",
+      "width": 1024,
+      "height": 660
+    },
+    {
+      "id": "500px-ZivpLLNMF5",
+      "displayOnly": true,
+      "title": "This morning",
+      "subtitle": "",
+      "author": "Saelanwangsa",
+      "credit": "Photography by Saelanwangsa · 500px",
+      "source": "https://500px.com/photo/ZivpLLNMF5",
+      "focalPoint": {
+        "x": 50,
+        "y": 50
+      },
+      "url": "/covers/b30f0b645de08d40565335a4.webp",
+      "width": 1024,
+      "height": 685
+    }
+  ]
+}

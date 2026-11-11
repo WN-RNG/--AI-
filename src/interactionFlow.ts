@@ -2,7 +2,7 @@ import type { Album, Photo, PublicAlbum, PublicPhoto } from '../shared/types.ts'
 
 /** A one-time action to resume after authentication; it contains no account credentials. */
 export interface PendingIntent {
-  kind: 'login' | 'download' | 'favorite' | 'upload' | 'workspace';
+  kind: 'login' | 'download' | 'favorite' | 'upload' | 'workspace' | 'postcard';
   path: string;
   photoId?: string;
   scrollY: number;

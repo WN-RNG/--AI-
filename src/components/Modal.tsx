@@ -1,12 +1,11 @@
+import { useI18n } from '../i18n';
 /**
  * 通用弹窗：处理遮罩、键盘焦点、关闭与背景滚动锁定。
  * 逐文件说明见项目根目录《项目结构与代码说明.md》。
  */
-
 import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { acquireBodyScrollLock } from './dialogScrollLock';
-
 export default function Modal({
   title,
   children,
@@ -18,6 +17,7 @@ export default function Modal({
   onClose: () => void;
   wide?: boolean;
 }) {
+  const { t } = useI18n();
   const ref = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -65,11 +65,11 @@ export default function Modal({
         ref={ref}
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-label={t(title)}
       >
         <div className="modal-heading">
-          <h2>{title}</h2>
-          <button className="icon-button" onClick={onClose} aria-label="关闭">
+          <h2>{t(title)}</h2>
+          <button className="icon-button" onClick={onClose} aria-label={t('关闭')}>
             <X size={20} />
           </button>
         </div>

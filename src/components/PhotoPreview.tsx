@@ -24,6 +24,8 @@ import {
 } from 'lucide-react';
 import type { Photo } from '../../shared/types';
 import { acquireBodyScrollLock } from './dialogScrollLock';
+import PostcardMaker, { type PostcardExportHandler } from './PostcardMaker';
+import { useI18n } from '../i18n';
 import './PhotoPreview.css';
 
 type PhotoPatch = {
@@ -43,6 +45,7 @@ export interface PhotoPreviewProps {
   onFavorite?: (photo: Photo) => void;
   onNavigateAlbum?: (photo: Photo) => void;
   onActiveChange?: (id: string) => void;
+  onPostcardExport?: PostcardExportHandler;
   isInteractionBlocked?: boolean;
   currentUserId?: string;
   readOnly?: boolean;
@@ -65,11 +68,11 @@ function formatBytes(bytes: number) {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-function formatDate(value: string | null | undefined) {
-  if (!value) return '未记录';
+function formatDate(value: string | null | undefined, language: 'en' | 'zh') {
+  if (!value) return language === 'en' ? 'Not recorded' : '未记录';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '未记录';
-  return new Intl.DateTimeFormat('zh-CN', {
+  if (Number.isNaN(date.getTime())) return language === 'en' ? 'Not recorded' : '未记录';
+  return new Intl.DateTimeFormat(language === 'en' ? 'en-GB' : 'zh-CN', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -105,10 +108,14 @@ export function PhotoPreview({
   onFavorite,
   onNavigateAlbum,
   onActiveChange,
+  onPostcardExport,
   isInteractionBlocked = false,
   currentUserId,
   readOnly = false,
 }: PhotoPreviewProps) {
+  const { language, t } = useI18n();
+  const [mode, setMode] = useState<'view' | 'postcard'>('view');
+  const [postcardOpened, setPostcardOpened] = useState(false);
   const available = useMemo(() => photos.filter((photo) => !photo.deletedAt), [photos]);
   const [activeId, setActiveId] = useState(initialId);
   const current = available.find((photo) => photo.id === activeId) ?? available[0];
@@ -205,7 +212,7 @@ export function PhotoPreview({
     try {
       await onUpdate(current.id, patch);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '操作未完成，请重试。');
+      setError(reason instanceof Error ? reason.message : t('操作未完成，请重试。'));
     } finally {
       setBusy(null);
     }
@@ -218,7 +225,7 @@ export function PhotoPreview({
     try {
       await onSetCover(current.id);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '设置封面失败，请重试。');
+      setError(reason instanceof Error ? reason.message : t('设置封面失败，请重试。'));
     } finally {
       setBusy(null);
     }
@@ -244,7 +251,7 @@ export function PhotoPreview({
       if (next) setActiveId(next.id);
       else onClose();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '移入回收站失败，请重试。');
+      setError(reason instanceof Error ? reason.message : t('移入回收站失败，请重试。'));
     } finally {
       setBusy(null);
     }
@@ -292,6 +299,7 @@ export function PhotoPreview({
       event.preventDefault();
       navigate(1);
     }
+    if (mode !== 'view') return;
     if (event.key === '+' || event.key === '=') {
       event.preventDefault();
       changeZoom(zoom * 1.25);
@@ -419,16 +427,16 @@ export function PhotoPreview({
   const displayedDimensions = readOnly
     ? loaded
       ? `${imageWidth.toLocaleString()} × ${imageHeight.toLocaleString()}`
-      : '加载中'
+      : t('加载中')
     : `${current.width.toLocaleString()} × ${current.height.toLocaleString()}`;
 
   return (
     <div
-      className="pp-overlay"
+      className={`pp-overlay ${mode === 'postcard' ? 'is-postcard' : ''}`}
       ref={dialogRef}
       role="dialog"
       aria-modal={!isInteractionBlocked}
-      aria-label={`照片预览：${current.filename}`}
+      aria-label={`${language === 'en' ? 'Photo viewer' : '照片预览'}: ${current.filename}`}
     >
       <div
         className="pp-shell"
@@ -450,21 +458,42 @@ export function PhotoPreview({
               </span>
             </span>
           </div>
+          <div className="pp-mode-switch" role="group" aria-label={t('查看模式')}>
+            <button
+              type="button"
+              aria-pressed={mode === 'view'}
+              className={mode === 'view' ? 'is-active' : ''}
+              onClick={() => setMode('view')}
+            >
+              {language === 'en' ? 'View' : t('普通看图')}
+            </button>
+            <button
+              type="button"
+              aria-pressed={mode === 'postcard'}
+              className={mode === 'postcard' ? 'is-active' : ''}
+              onClick={() => {
+                setPostcardOpened(true);
+                setMode('postcard');
+              }}
+            >
+              {language === 'en' ? 'Postcard' : t('明信片')}
+            </button>
+          </div>
           <div className="pp-header-actions">
             {!readOnly && onSetCover && (
               <button
                 className="pp-cover-button"
                 onClick={() => void setCover()}
                 disabled={!!busy}
-                title="设为相册大屏封面"
-                aria-label="设为相册大屏封面"
+                title={t('设为相册大屏封面')}
+                aria-label={t('设为相册大屏封面')}
               >
                 {busy === 'cover' ? (
                   <LoaderCircle className="pp-spin" size={17} />
                 ) : (
                   <Image size={17} />
                 )}
-                <span>设为封面</span>
+                <span>{t('设为封面')}</span>
               </button>
             )}
             {readOnly && onFavorite && (
@@ -472,9 +501,9 @@ export function PhotoPreview({
                 type="button"
                 className={`pp-icon-button pp-favorite ${publicPhoto?.isFavorite ? 'is-active' : ''}`}
                 onClick={() => onFavorite(current)}
-                aria-label={publicPhoto?.isFavorite ? '取消收藏作品' : '收藏作品'}
+                aria-label={publicPhoto?.isFavorite ? t('取消收藏作品') : t('收藏作品')}
                 aria-pressed={!!publicPhoto?.isFavorite}
-                title={publicPhoto?.isFavorite ? '取消收藏' : '收藏作品'}
+                title={publicPhoto?.isFavorite ? t('取消收藏') : t('收藏作品')}
               >
                 <Heart size={19} fill={publicPhoto?.isFavorite ? 'currentColor' : 'none'} />
               </button>
@@ -486,14 +515,18 @@ export function PhotoPreview({
                 onClick={() => onDownload?.(current)}
                 disabled={!downloadAllowed || !onDownload}
                 aria-label={
-                  !isCurrentOwner ? (downloadAllowed ? '下载展示图' : '作者未开放下载') : '下载原图'
+                  !isCurrentOwner
+                    ? downloadAllowed
+                      ? t('下载展示图')
+                      : t('作者未开放下载')
+                    : t('下载原图')
                 }
                 title={
                   !isCurrentOwner
                     ? downloadAllowed
-                      ? '下载作者允许的展示图'
-                      : '作者未开放下载'
-                    : '下载原图'
+                      ? t('下载作者允许的展示图')
+                      : t('作者未开放下载')
+                    : t('下载原图')
                 }
               >
                 <Download size={19} />
@@ -503,30 +536,32 @@ export function PhotoPreview({
                 className="pp-icon-button"
                 href={downloadUrl(current.url)}
                 download={current.filename}
-                aria-label="下载原图"
-                title="下载原图"
+                aria-label={t('下载原图')}
+                title={t('下载原图')}
               >
                 <Download size={19} />
               </a>
             )}
-            <button
-              className={`pp-icon-button ${showInfo ? 'is-active' : ''}`}
-              onClick={() => setShowInfo(!showInfo)}
-              aria-pressed={showInfo}
-              aria-expanded={showInfo}
-              aria-controls="pp-information"
-              aria-label={showInfo ? '隐藏照片信息' : '查看照片信息'}
-              title="照片信息"
-            >
-              <Info size={19} />
-            </button>
+            {mode === 'view' && (
+              <button
+                className={`pp-icon-button ${showInfo ? 'is-active' : ''}`}
+                onClick={() => setShowInfo(!showInfo)}
+                aria-pressed={showInfo}
+                aria-expanded={showInfo}
+                aria-controls="pp-information"
+                aria-label={showInfo ? t('隐藏照片信息') : t('查看照片信息')}
+                title={t('照片信息')}
+              >
+                <Info size={19} />
+              </button>
+            )}
             <span className="pp-divider" />
             <button
               className="pp-icon-button pp-close"
               ref={closeRef}
               onClick={onClose}
-              aria-label="关闭预览"
-              title="关闭预览（Esc）"
+              aria-label={t('关闭预览')}
+              title={t('关闭预览（Esc）')}
             >
               <X size={22} />
             </button>
@@ -539,14 +574,14 @@ export function PhotoPreview({
             <button
               className="pp-icon-button"
               onClick={() => setError('')}
-              aria-label="关闭错误提示"
+              aria-label={t('关闭错误提示')}
             >
               <X size={16} />
             </button>
           </div>
         )}
 
-        <div className="pp-body">
+        <div className="pp-body" hidden={mode !== 'view'}>
           <div className="pp-view-area">
             <div
               className={`pp-stage ${zoom > 1 ? 'is-zoomed' : ''} ${dragging ? 'is-dragging' : ''}`}
@@ -566,18 +601,18 @@ export function PhotoPreview({
               {!loaded && !broken && (
                 <div className="pp-image-state" role="status">
                   <LoaderCircle size={25} className="pp-spin" />
-                  <span>正在呈现照片</span>
+                  <span>{t('正在呈现照片')}</span>
                 </div>
               )}
               {broken && (
                 <div className="pp-image-state" role="status">
                   <Image size={32} />
-                  <span>暂时无法加载这张照片</span>
+                  <span>{t('暂时无法加载这张照片')}</span>
                   <button
                     className="pp-text-button"
                     onClick={() => setRetryKey((value) => value + 1)}
                   >
-                    重新加载
+                    {t('重新加载')}
                   </button>
                 </div>
               )}
@@ -614,8 +649,8 @@ export function PhotoPreview({
                   className="pp-navigation pp-previous"
                   onClick={() => navigate(-1)}
                   disabled={!!busy}
-                  aria-label="上一张照片"
-                  title="上一张（←）"
+                  aria-label={t('上一张照片')}
+                  title={t('上一张（←）')}
                 >
                   <ChevronLeft size={26} strokeWidth={1.5} />
                 </button>
@@ -623,8 +658,8 @@ export function PhotoPreview({
                   className="pp-navigation pp-next"
                   onClick={() => navigate(1)}
                   disabled={!!busy}
-                  aria-label="下一张照片"
-                  title="下一张（→）"
+                  aria-label={t('下一张照片')}
+                  title={t('下一张（→）')}
                 >
                   <ChevronRight size={26} strokeWidth={1.5} />
                 </button>
@@ -633,21 +668,21 @@ export function PhotoPreview({
             <div className="pp-image-caption">
               <span>
                 {readOnly
-                  ? '公开作品 · 展示图预览'
+                  ? t('公开作品 · 展示图预览')
                   : current.pick === 'keep'
-                    ? '已选入作品'
+                    ? t('已选入作品')
                     : current.pick === 'reject'
-                      ? '已标记淘汰'
-                      : '让每一张照片，都值得被看见。'}
+                      ? t('已标记淘汰')
+                      : t('让每一张照片，都值得被看见。')}
               </span>
               <span>{displayedDimensions}</span>
             </div>
           </div>
 
           {showInfo && (
-            <aside className="pp-information" id="pp-information" aria-label="照片信息">
+            <aside className="pp-information" id="pp-information" aria-label={t('照片信息')}>
               <div className="pp-panel-heading">
-                <span>照片信息</span>
+                <span>{t('照片信息')}</span>
                 <span>DETAILS</span>
               </div>
               <div className="pp-info-preview">
@@ -656,7 +691,7 @@ export function PhotoPreview({
               <h3>{readOnly ? publicPhoto?.title || current.filename : current.filename}</h3>
               {readOnly && (
                 <div className="pp-public-context">
-                  <span className="pp-author-name">{publicPhoto?.authorName || '创作者'}</span>
+                  <span className="pp-author-name">{publicPhoto?.authorName || t('创作者')}</span>
                   {onNavigateAlbum ? (
                     <button
                       type="button"
@@ -664,7 +699,7 @@ export function PhotoPreview({
                       onClick={() => onNavigateAlbum(current)}
                     >
                       <FolderOpen size={14} />
-                      <span>{publicPhoto?.albumTitle || '查看所属相册'}</span>
+                      <span>{publicPhoto?.albumTitle || t('查看所属相册')}</span>
                       <ChevronRight size={13} />
                     </button>
                   ) : (
@@ -674,35 +709,35 @@ export function PhotoPreview({
                   )}
                   <p className="pp-download-permission">
                     {isCurrentOwner
-                      ? '你是作品作者，可下载自己的原图'
+                      ? t('你是作品作者，可下载自己的原图')
                       : downloadAllowed
-                        ? '作者允许登录后下载展示图'
-                        : '作者未开放下载'}
+                        ? t('作者允许登录后下载展示图')
+                        : t('作者未开放下载')}
                   </p>
                 </div>
               )}
               <dl>
                 <div>
-                  <dt>{readOnly ? '展示图尺寸' : '分辨率'}</dt>
+                  <dt>{readOnly ? t('展示图尺寸') : t('分辨率')}</dt>
                   <dd>{displayedDimensions}</dd>
                 </div>
                 {!readOnly && (
                   <>
                     <div>
-                      <dt>文件大小</dt>
+                      <dt>{t('文件大小')}</dt>
                       <dd>{formatBytes(current.bytes)}</dd>
                     </div>
                     <div>
-                      <dt>文件格式</dt>
+                      <dt>{t('文件格式')}</dt>
                       <dd>{current.mime.split('/')[1]?.toUpperCase() ?? current.mime}</dd>
                     </div>
                     <div>
-                      <dt>拍摄时间</dt>
-                      <dd>{formatDate(current.capturedAt)}</dd>
+                      <dt>{t('拍摄时间')}</dt>
+                      <dd>{formatDate(current.capturedAt, language)}</dd>
                     </div>
                     <div>
-                      <dt>上传时间</dt>
-                      <dd>{formatDate(current.createdAt)}</dd>
+                      <dt>{t('上传时间')}</dt>
+                      <dd>{formatDate(current.createdAt, language)}</dd>
                     </div>
                   </>
                 )}
@@ -710,29 +745,29 @@ export function PhotoPreview({
               {!readOnly && (
                 <>
                   <div className="pp-info-rule" />
-                  <div className="pp-info-section-label">选片状态</div>
+                  <div className="pp-info-section-label">{t('选片状态')}</div>
                   <div className={`pp-status pp-status-${current.pick}`}>
                     {current.pick === 'keep' ? (
                       <>
                         <Check size={14} />
-                        {' 已保留'}
+                        {t(' 已保留')}
                       </>
                     ) : current.pick === 'reject' ? (
                       <>
                         <X size={14} />
-                        {' 待淘汰'}
+                        {t(' 待淘汰')}
                       </>
                     ) : (
-                      '尚未标记'
+                      t('尚未标记')
                     )}
                   </div>
-                  <div className="pp-info-section-label">分析提示</div>
+                  <div className="pp-info-section-label">{t('分析提示')}</div>
                   <div className="pp-analysis-tags">
-                    {current.duplicateOf && <span>检测到重复文件</span>}
-                    {current.groupId && <span>属于相似照片组</span>}
-                    {current.blur && <span>疑似模糊 · 请人工确认</span>}
+                    {current.duplicateOf && <span>{t('检测到重复文件')}</span>}
+                    {current.groupId && <span>{t('属于相似照片组')}</span>}
+                    {current.blur && <span>{t('疑似模糊 · 请人工确认')}</span>}
                     {!current.duplicateOf && !current.groupId && !current.blur && (
-                      <p>暂无需要关注的分析提示</p>
+                      <p>{t('暂无需要关注的分析提示')}</p>
                     )}
                   </div>
                 </>
@@ -741,14 +776,26 @@ export function PhotoPreview({
           )}
         </div>
 
-        <div className="pp-toolbar">
-          <div className="pp-zoom-controls" aria-label="缩放控制">
+        {postcardOpened && (
+          <div className="pp-postcard-body" hidden={mode !== 'postcard'}>
+            <PostcardMaker
+              key={current.id}
+              photo={current}
+              downloadAllowed={downloadAllowed}
+              currentUserId={currentUserId}
+              onRequestExport={onPostcardExport}
+            />
+          </div>
+        )}
+
+        <div className="pp-toolbar" hidden={mode !== 'view'}>
+          <div className="pp-zoom-controls" aria-label={t('缩放控制')}>
             <button
               className="pp-icon-button"
               onClick={() => changeZoom(zoom / 1.25)}
               disabled={zoom <= 1 || broken}
-              aria-label="缩小照片"
-              title="缩小（−）"
+              aria-label={t('缩小照片')}
+              title={t('缩小（−）')}
             >
               <Minus size={17} />
             </button>
@@ -759,8 +806,8 @@ export function PhotoPreview({
               className="pp-icon-button"
               onClick={() => changeZoom(zoom * 1.25)}
               disabled={zoom >= maxZoom || broken}
-              aria-label="放大照片"
-              title="放大（＋）"
+              aria-label={t('放大照片')}
+              title={t('放大（＋）')}
             >
               <Plus size={17} />
             </button>
@@ -769,18 +816,18 @@ export function PhotoPreview({
               className={`pp-fit-button ${zoom === 1 ? 'is-active' : ''}`}
               onClick={resetView}
               disabled={broken}
-              aria-label="适合屏幕"
-              title="适合屏幕（0）"
+              aria-label={t('适合屏幕')}
+              title={t('适合屏幕（0）')}
             >
               <Maximize size={16} />
-              <span>适合</span>
+              <span>{t('适合')}</span>
             </button>
             <button
               className="pp-fit-button pp-actual-size"
               onClick={() => changeZoom(1 / fitScale)}
               disabled={broken}
-              aria-label="以百分之百实际大小查看"
-              title="实际像素"
+              aria-label={t('以百分之百实际大小查看')}
+              title={t('实际像素')}
             >
               1:1
             </button>
@@ -788,14 +835,18 @@ export function PhotoPreview({
 
           {!readOnly && (
             <div className="pp-selection-controls">
-              <div className="pp-rating" aria-label="照片星级">
+              <div className="pp-rating" aria-label={t('照片星级')}>
                 {[1, 2, 3, 4, 5].map((rating) => (
                   <button
                     key={rating}
                     className={`pp-star ${current.rating >= rating ? 'is-rated' : ''}`}
-                    aria-label={`评为 ${rating} 星${current.rating === rating ? '，再次点击取消评分' : ''}`}
+                    aria-label={
+                      language === 'en'
+                        ? `Rate ${rating} stars${current.rating === rating ? ', click again to clear' : ''}`
+                        : `评为 ${rating} 星${current.rating === rating ? '，再次点击取消评分' : ''}`
+                    }
                     aria-pressed={current.rating >= rating}
-                    title={`${rating} 星`}
+                    title={`${rating} ${language === 'en' ? 'stars' : '星'}`}
                     disabled={!!busy}
                     onClick={() =>
                       void mutate({ rating: current.rating === rating ? 0 : rating }, 'rating')
@@ -812,11 +863,11 @@ export function PhotoPreview({
                   void mutate({ pick: current.pick === 'keep' ? 'none' : 'keep' }, 'pick')
                 }
                 disabled={!!busy}
-                aria-label={current.pick === 'keep' ? '取消保留照片' : '保留这张照片'}
+                aria-label={current.pick === 'keep' ? t('取消保留照片') : t('保留这张照片')}
                 aria-pressed={current.pick === 'keep'}
               >
                 <Check size={17} />
-                <span>{current.pick === 'keep' ? '已保留' : '保留'}</span>
+                <span>{current.pick === 'keep' ? t('已保留') : t('保留')}</span>
               </button>
               <button
                 className={`pp-pick-button ${current.pick === 'reject' ? 'is-rejected' : ''}`}
@@ -824,11 +875,11 @@ export function PhotoPreview({
                   void mutate({ pick: current.pick === 'reject' ? 'none' : 'reject' }, 'pick')
                 }
                 disabled={!!busy}
-                aria-label={current.pick === 'reject' ? '取消淘汰标记' : '标记为淘汰'}
+                aria-label={current.pick === 'reject' ? t('取消淘汰标记') : t('标记为淘汰')}
                 aria-pressed={current.pick === 'reject'}
               >
                 <X size={17} />
-                <span>淘汰</span>
+                <span>{t('淘汰')}</span>
               </button>
               <button
                 className="pp-icon-button pp-delete"
@@ -838,25 +889,25 @@ export function PhotoPreview({
                   setConfirming(true);
                 }}
                 disabled={!!busy}
-                aria-label="移入回收站"
-                title="移入回收站"
+                aria-label={t('移入回收站')}
+                title={t('移入回收站')}
               >
                 <Trash2 size={17} />
               </button>
             </div>
           )}
-          {readOnly && <span className="pp-view-hint">滚轮缩放 · 双击查看细节</span>}
+          {readOnly && <span className="pp-view-hint">{t('滚轮缩放 · 双击查看细节')}</span>}
         </div>
 
-        <footer className="pp-filmstrip-area">
+        <footer className="pp-filmstrip-area" hidden={mode !== 'view'}>
           <div className="pp-filmstrip-label">
             <span>THE COLLECTION</span>
             <span>
               {available.length}
-              {' 张照片'}
+              {t(' 张照片')}
             </span>
           </div>
-          <div className="pp-filmstrip" aria-label="浏览相册照片">
+          <div className="pp-filmstrip" aria-label={t('浏览相册照片')}>
             {available.map((photo, index) => (
               <button
                 key={photo.id}
@@ -868,7 +919,7 @@ export function PhotoPreview({
                 onClick={() => {
                   if (!busy) setActiveId(photo.id);
                 }}
-                aria-label={`查看第 ${index + 1} 张：${photo.filename}`}
+                aria-label={`${language === 'en' ? 'View photo' : '查看照片'} ${index + 1}: ${photo.filename}`}
                 aria-current={photo.id === current.id ? 'true' : undefined}
                 disabled={!!busy}
               >
@@ -904,9 +955,10 @@ export function PhotoPreview({
               <Trash2 size={23} />
             </div>
             <span className="pp-eyebrow">KEEP WHAT MATTERS</span>
-            <h3 id="pp-delete-title">将这张照片移入回收站？</h3>
+            <h3 id="pp-delete-title">{t('将这张照片移入回收站？')}</h3>
             <p id="pp-delete-description">
-              “{current.filename}”将从当前相册移除。你可以在回收站中恢复它。
+              “{current.filename}
+              {t('”将从当前相册移除。你可以在回收站中恢复它。')}
             </p>
             {error && (
               <p className="pp-confirm-error" role="alert">
@@ -920,14 +972,15 @@ export function PhotoPreview({
                 onClick={cancelDelete}
                 disabled={!!busy}
               >
-                取消
+                {t('取消')}
               </button>
               <button
                 className="pp-confirm-delete"
                 onClick={() => void deletePhoto()}
                 disabled={!!busy}
               >
-                {busy === 'delete' && <LoaderCircle size={16} className="pp-spin" />}移入回收站
+                {busy === 'delete' && <LoaderCircle size={16} className="pp-spin" />}
+                {t('移入回收站')}
               </button>
             </div>
           </div>

@@ -40,6 +40,9 @@ import {
 import type { Album, Photo, PhotoPatch, PublicPhoto, User } from '../shared/types';
 import { api, formatDate } from './api';
 import AuthDialog from './components/AuthDialog';
+import HomeCover from './components/HomeCover';
+import { useI18n } from './i18n';
+import { translateUploadIssue } from './uiTranslations';
 import PublishDialog from './components/PublishDialog';
 import {
   downloadPhoto,
@@ -122,26 +125,29 @@ function PhotoCard({
   onPick: () => void;
   onFavorite?: () => void;
 }) {
+  const { t } = useI18n();
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [photo.thumbnailUrl]);
   const imageWidth = photo.width > 0 ? photo.width : 3;
   const imageHeight = photo.height > 0 ? photo.height : 2;
   return (
-    <article className={`photo-card ${selected ? 'is-selected' : ''}`}>
+    <article
+      className={`photo-card ${readOnly ? 'is-public' : ''} ${selected ? 'is-selected' : ''}`}
+    >
       <button
         className={`photo-image-button ${imageFailed ? 'is-image-error' : ''}`}
         style={imageFailed ? { aspectRatio: `${imageWidth} / ${imageHeight}` } : undefined}
         onClick={selecting ? onSelect : onOpen}
-        aria-label={`${selecting ? '选择' : '预览'} ${photo.filename}`}
+        aria-label={`${selecting ? t('选择') : t('预览')} ${photo.filename}`}
       >
         {imageFailed ? (
           <span
             className="photo-image-fallback"
             role="img"
-            aria-label={`${photo.filename} 暂时无法加载`}
+            aria-label={t('{value0} 暂时无法加载', { value0: String(photo.filename) })}
           >
             <Images size={24} />
-            <span>暂时无法加载</span>
+            <span>{t('暂时无法加载')}</span>
           </span>
         ) : (
           <img
@@ -159,7 +165,7 @@ function PhotoCard({
         <button
           className={`photo-check ${selected ? 'is-selected' : ''} ${selecting ? 'is-visible' : ''}`}
           onClick={onSelect}
-          aria-label={`${selected ? '取消选择' : '选择'} ${photo.filename}`}
+          aria-label={`${selected ? t('取消选择') : t('选择')} ${photo.filename}`}
           aria-pressed={selected}
         >
           {selected && <Check size={14} />}
@@ -169,15 +175,15 @@ function PhotoCard({
         {photo.duplicateOf ? (
           <span className="photo-badge">
             <Images size={12} />
-            完全重复
+            {t('完全重复')}
           </span>
         ) : photo.groupId ? (
           <span className="photo-badge">
             <Images size={12} />
-            相似组
+            {t('相似组')}
           </span>
         ) : null}
-        {photo.blur && <span className="photo-badge badge-amber">疑似模糊</span>}
+        {photo.blur && <span className="photo-badge badge-amber">{t('疑似模糊')}</span>}
       </div>
       <div className="photo-meta">
         <div>
@@ -186,7 +192,7 @@ function PhotoCard({
           </button>
           <time>
             {readOnly
-              ? photo.authorName || '摄影创作者'
+              ? photo.authorName || t('摄影创作者')
               : formatDate(photo.capturedAt || photo.createdAt)}
           </time>
         </div>
@@ -194,8 +200,8 @@ function PhotoCard({
           <button
             className={`pick-button ${photo.pick === 'keep' ? 'is-kept' : ''}`}
             onClick={onPick}
-            aria-label={photo.pick === 'keep' ? '取消保留' : '标记为保留'}
-            title={photo.pick === 'keep' ? '已标记保留' : '标记为保留'}
+            aria-label={photo.pick === 'keep' ? t('取消保留') : t('标记为保留')}
+            title={photo.pick === 'keep' ? t('已标记保留') : t('标记为保留')}
           >
             <Star size={15} fill={photo.pick === 'keep' ? 'currentColor' : 'none'} />
           </button>
@@ -203,9 +209,9 @@ function PhotoCard({
           <button
             className={`pick-button ${photo.isFavorite ? 'is-kept' : ''}`}
             onClick={onFavorite}
-            aria-label={photo.isFavorite ? '取消收藏' : '收藏作品'}
+            aria-label={photo.isFavorite ? t('取消收藏') : t('收藏作品')}
             aria-pressed={!!photo.isFavorite}
-            title={photo.isFavorite ? '已收藏' : '收藏作品'}
+            title={photo.isFavorite ? t('已收藏') : t('收藏作品')}
           >
             <Heart size={18} fill={photo.isFavorite ? 'currentColor' : 'none'} />
           </button>
@@ -223,6 +229,7 @@ function CreateAlbum({
   onClose: () => void;
   onCreate: (album: Album) => void;
 }) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const alive = useRef(true);
@@ -248,45 +255,46 @@ function CreateAlbum({
     }
   }
   return (
-    <Modal title="新建拍摄项目" onClose={onClose}>
-      <p className="muted modal-intro">给这一次拍摄留一个专属空间。</p>
+    <Modal title={t('新建拍摄项目')} onClose={onClose}>
+      <p className="muted modal-intro">{t('给这一次拍摄留一个专属空间。')}</p>
       <form className="form-stack" onSubmit={submit}>
         <label>
-          项目名称
+          {t('项目名称')}
           <input
             name="title"
-            placeholder="例如：京都 · 光影纪行"
+            placeholder={t('例如：京都 · 光影纪行')}
             required
             maxLength={120}
             autoComplete="off"
           />
         </label>
         <label>
-          {'拍摄地点 '}
-          <span className="optional">选填</span>
-          <input name="location" placeholder="城市或地点" maxLength={120} />
+          {t('拍摄地点 ')}
+          <span className="optional">{t('选填')}</span>
+          <input name="location" placeholder={t('城市或地点')} maxLength={120} />
         </label>
         <label>
-          {'项目描述 '}
-          <span className="optional">选填</span>
+          {t('项目描述 ')}
+          <span className="optional">{t('选填')}</span>
           <textarea
             name="description"
-            placeholder="记录这一次拍摄的故事……"
+            placeholder={t('记录这一次拍摄的故事……')}
             maxLength={1000}
             rows={3}
           />
         </label>
         {error && (
           <p className="form-error" role="alert">
-            {error}
+            {t(error)}
           </p>
         )}
         <div className="modal-actions">
           <button type="button" className="button button-secondary" onClick={onClose}>
-            取消
+            {t('取消')}
           </button>
           <button className="button button-primary" disabled={busy}>
-            {busy ? <LoaderCircle className="spin" size={17} /> : <Plus size={17} />}创建项目
+            {busy ? <LoaderCircle className="spin" size={17} /> : <Plus size={17} />}
+            {t('创建项目')}
           </button>
         </div>
       </form>
@@ -295,6 +303,7 @@ function CreateAlbum({
 }
 
 export default function App() {
+  const { t, language, setLanguage } = useI18n();
   const { path, route, navigate } = useRoute();
   let publicSlug: string | null = null;
   if (path.startsWith('/p/')) {
@@ -322,6 +331,8 @@ export default function App() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [unavailableFavorites, setUnavailableFavorites] = useState(0);
+  const [authRegister, setAuthRegister] = useState(false);
+  const pendingPostcard = useRef<{ photoId: string; perform: () => Promise<void> } | null>(null);
   const [authIntent, setAuthIntent] = useState<PendingIntent | null>(null);
   const [resumeIntent, setResumeIntent] = useState<PendingIntent | null>(null);
   const [uploadGuide, setUploadGuide] = useState(false);
@@ -396,7 +407,7 @@ export default function App() {
     );
   }, []);
   const cancelUpload = useCallback(
-    (reason = '已取消本次上传') => {
+    (reason = t('已取消本次上传')) => {
       const job = uploadJobRef.current;
       if (!job) return;
       job.cancelled = true;
@@ -410,7 +421,7 @@ export default function App() {
       reload();
       tell(reason);
     },
-    [reload, tell],
+    [reload, tell, t],
   );
   useEffect(() => {
     const job = uploadJobRef.current;
@@ -420,8 +431,8 @@ export default function App() {
     ) {
       cancelUpload(
         job.phase === 'confirming'
-          ? '已取消原项目的本次上传确认'
-          : '已停止原项目的后续上传，已完成的照片会保留',
+          ? t('已取消原项目的本次上传确认')
+          : t('已停止原项目的后续上传，已完成的照片会保留'),
       );
     }
     dragDepth.current = 0;
@@ -453,7 +464,7 @@ export default function App() {
           authEpoch.current === epoch &&
           error.name !== 'AbortError'
         )
-          setLoadError('暂时无法连接相册服务，请稍后重试。');
+          setLoadError(t('暂时无法连接相册服务，请稍后重试。'));
       })
       .finally(() => {
         if (!controller.signal.aborted && authEpoch.current === epoch) setSessionLoading(false);
@@ -469,7 +480,7 @@ export default function App() {
     api<{ albums: Album[] }>('/albums', { signal: controller.signal })
       .then((data) => {
         if (controller.signal.aborted) return;
-        if (!Array.isArray(data.albums)) throw new Error('相册列表响应异常，请稍后重试');
+        if (!Array.isArray(data.albums)) throw new Error(t('相册列表响应异常，请稍后重试'));
         setAlbums(data.albums);
         setAlbumId((current) =>
           data.albums.some((a) => a.id === current) ? current : data.albums[0]?.id || '',
@@ -579,7 +590,7 @@ export default function App() {
         })
         .catch((error) => {
           if (!controller.signal.aborted && error.name !== 'AbortError')
-            tell('这张作品已撤回或暂不可用，可继续浏览其他作品');
+            tell(t('这张作品已撤回或暂不可用，可继续浏览其他作品'));
         });
       return () => controller.abort();
     }
@@ -619,12 +630,14 @@ export default function App() {
         if (data.albumId === albumId) {
           if (data.type === 'analyzing' || data.type === 'progress') {
             setAnalyzing(true);
-            setAnalysisProgress(data.total ? `${data.current || 0} / ${data.total}` : '正在分析');
+            setAnalysisProgress(
+              data.total ? `${data.current || 0} / ${data.total}` : t('正在分析'),
+            );
           }
           if (data.type === 'analyzed' || data.type === 'analysis-error') {
             setAnalyzing(false);
             setAnalysisProgress('');
-            if (data.type === 'analyzed') tell('分析已完成，可以开始对比选片了');
+            if (data.type === 'analyzed') tell(t('分析已完成，可以开始对比选片了'));
           }
         }
         clearTimeout(timer);
@@ -770,12 +783,12 @@ export default function App() {
   }
   async function setCover(id: string) {
     await patchAlbum({ coverMode: 'fixed', coverPhotoId: id });
-    tell('已设置为相册封面');
+    tell(t('已设置为相册封面'));
   }
   async function analyze(id = albumId) {
     if (activeAlbumRef.current === id) {
       setAnalyzing(true);
-      setAnalysisProgress('准备分析');
+      setAnalysisProgress(t('准备分析'));
     }
     try {
       await api('/albums/' + id + '/analyze', { method: 'POST' });
@@ -800,7 +813,7 @@ export default function App() {
   async function runUpload(job: UploadJob, allowLargeFiles: boolean) {
     if (job.started) return;
     if (!uploadContextIsCurrent(job)) {
-      if (uploadJobRef.current === job) cancelUpload('页面已切换，请在当前项目重新选择照片');
+      if (uploadJobRef.current === job) cancelUpload(t('页面已切换，请在当前项目重新选择照片'));
       return;
     }
     job.started = true;
@@ -849,7 +862,7 @@ export default function App() {
               try {
                 response = JSON.parse(xhr.responseText);
               } catch {
-                fail(new Error('服务响应异常，请稍后重试'));
+                fail(new Error(t('服务响应异常，请稍后重试')));
                 return;
               }
               if (
@@ -859,22 +872,24 @@ export default function App() {
               ) {
                 cleanup();
                 resolve(response);
-              } else fail(new Error(response?.error || '上传失败，请重试'));
+              } else fail(new Error(response?.error || t('上传失败，请重试')));
             };
-            xhr.onerror = () => fail(new Error('连接中断，请先检查上传结果，再重试未完成的照片'));
-            xhr.onabort = () => fail(new DOMException('本次上传已取消', 'AbortError'));
+            xhr.onerror = () =>
+              fail(new Error(t('连接中断，请先检查上传结果，再重试未完成的照片')));
+            xhr.onabort = () => fail(new DOMException(t('本次上传已取消'), 'AbortError'));
             xhr.timeout = batch.allowLargeFiles ? 300000 : 180000;
-            xhr.ontimeout = () => fail(new Error('上传超时，请先检查上传结果，再重试未完成的照片'));
+            xhr.ontimeout = () =>
+              fail(new Error(t('上传超时，请先检查上传结果，再重试未完成的照片')));
             xhr.send(form);
           });
           job.uploaded += result.photos.length;
           if (Array.isArray(result.errors))
             result.errors.forEach((error) =>
-              job.failures.push(`${error.filename || '照片'}：${error.error || '上传失败'}`),
+              job.failures.push(`${error.filename || t('照片')}：${error.error || t('上传失败')}`),
             );
         } catch (error) {
           if (job.cancelled) break;
-          const message = error instanceof Error ? error.message : '上传失败，请重试';
+          const message = error instanceof Error ? error.message : t('上传失败，请重试');
           batch.files.forEach((file) => job.failures.push(`${file.name}：${message}`));
         }
         processed += batch.files.length;
@@ -889,8 +904,8 @@ export default function App() {
       }
     } catch (error) {
       if (!job.cancelled) {
-        const message = error instanceof Error ? error.message : '请重新选择未完成的照片';
-        job.failures.push(`本次上传未完成：${message}`);
+        const message = error instanceof Error ? error.message : t('请重新选择未完成的照片');
+        job.failures.push(t('本次上传未完成：{value0}', { value0: String(message) }));
       }
     } finally {
       // A cancelled old request must never release a later selection's lock or erase its errors.
@@ -911,7 +926,7 @@ export default function App() {
       routeRef.current === job.path &&
       uploadTabRef.current === job.tab
     ) {
-      tell(`已上传 ${job.uploaded} 张照片，正在后台分析`);
+      tell(t('已上传 {value0} 张照片，正在后台分析', { value0: String(job.uploaded) }));
       await analyze(job.albumId);
     }
   }
@@ -919,7 +934,7 @@ export default function App() {
   function upload(files: FileList | File[]) {
     if (!user || !albumId || publicView || tab === 'trash') return;
     if (uploadJobRef.current) {
-      tell('请先完成或取消本次上传，再选择其他照片');
+      tell(t('请先完成或取消本次上传，再选择其他照片'));
       return;
     }
     const selection = classifyUploadFiles(Array.from(files));
@@ -942,7 +957,7 @@ export default function App() {
     };
     recordUploadErrors(job, job.failures);
     if (!selection.files.length) {
-      tell('所选文件均未能上传，请查看文件提示');
+      tell(t('所选文件均未能上传，请查看文件提示'));
       return;
     }
     uploadJobRef.current = job;
@@ -961,7 +976,7 @@ export default function App() {
       setAlbumId(result.id);
       setTab('projects');
       reload();
-      tell('示例项目已加入你的空间，可自由体验选片');
+      tell(t('示例项目已加入你的空间，可自由体验选片'));
       await analyze(result.id);
     } catch (e) {
       if (authEpoch.current === epoch && routeRef.current === requestedPath)
@@ -983,7 +998,7 @@ export default function App() {
       setSelecting(false);
       setDeleteOpen(false);
       reload();
-      tell(patch.deleted ? '已移入回收站，可随时恢复' : '已更新选片标记');
+      tell(patch.deleted ? t('已移入回收站，可随时恢复') : t('已更新选片标记'));
     } catch (e) {
       if (currentScopeRef.current === scope) {
         reload();
@@ -1023,15 +1038,19 @@ export default function App() {
     reload();
     tell(
       settings.photoIds.length
-        ? `已发布 ${settings.photoIds.length} 张精选照片，其余照片继续私密`
-        : '已撤回公开，照片仍保留在你的相册中',
+        ? t('已发布 {value0} 张精选照片，其余照片继续私密', {
+            value0: String(settings.photoIds.length),
+          })
+        : t('已撤回公开，照片仍保留在你的相册中'),
     );
   }
   function requestLogin(
     kind: PendingIntent['kind'],
     photo?: Photo,
     workspaceTab?: PendingIntent['workspaceTab'],
+    register = false,
   ) {
+    setAuthRegister(register);
     setAuthIntent({
       kind,
       path: route,
@@ -1088,7 +1107,7 @@ export default function App() {
       );
       setPhotos(update);
       if (favoritesView && !next && visiblePhotos.length <= 1) closePreview();
-      tell(next ? '已加入我的收藏' : '已取消收藏');
+      tell(next ? t('已加入我的收藏') : t('已取消收藏'));
       reload();
     } catch (error) {
       if (currentScopeRef.current === scope) tell((error as Error).message);
@@ -1098,7 +1117,7 @@ export default function App() {
   }
   async function requestDownload(photo: Photo) {
     if (publicView && !photo.allowDownload && photo.authorId !== user?.id) {
-      tell('作者暂未开放展示图下载');
+      tell(t('作者暂未开放展示图下载'));
       return;
     }
     if (!user) {
@@ -1107,11 +1126,26 @@ export default function App() {
     }
     try {
       await downloadPhoto(photo.id);
-      tell('下载已准备好');
+      tell(t('下载已准备好'));
     } catch (error) {
       tell((error as Error).message);
     }
   }
+  function requestPostcardExport(photo: Photo, perform: () => Promise<void>) {
+    if (publicView && !photo.allowDownload && photo.authorId !== user?.id) {
+      tell(t('作者暂未开放展示图下载'));
+      return;
+    }
+    if (!user) {
+      pendingPostcard.current = { photoId: photo.id, perform };
+      requestLogin('postcard', photo);
+      return;
+    }
+    void perform().catch((error) => tell((error as Error).message));
+  }
+  useEffect(() => {
+    pendingPostcard.current = null;
+  }, [path, previewId]);
   async function loadMorePhotos() {
     if (!nextCursor || loadingMore || !galleryView) return;
     const version = feedRequestVersion.current;
@@ -1162,9 +1196,14 @@ export default function App() {
       if (intent.photoId && new URL(target, window.location.origin).searchParams.has('photo'))
         setPreviewId(intent.photoId);
       requestAnimationFrame(() => window.scrollTo({ top: intent.scrollY }));
-      if (intent.kind === 'download' && intent.photoId) {
+      if (intent.kind === 'postcard' && intent.photoId) {
+        const pending = pendingPostcard.current;
+        pendingPostcard.current = null;
+        if (pending?.photoId === intent.photoId)
+          void pending.perform().catch((error) => tell(error.message));
+      } else if (intent.kind === 'download' && intent.photoId) {
         void downloadPhoto(intent.photoId)
-          .then(() => tell('下载已准备好'))
+          .then(() => tell(t('下载已准备好')))
           .catch((e) => tell(e.message));
       } else if (intent.kind === 'favorite' && intent.photoId) {
         const id = intent.photoId;
@@ -1181,7 +1220,7 @@ export default function App() {
             setPhotos((items) =>
               items.map((photo) => (photo.id === id ? { ...photo, isFavorite: true } : photo)),
             );
-            tell('已加入我的收藏');
+            tell(t('已加入我的收藏'));
             reload();
           })
           .catch((e) => tell(e.message));
@@ -1219,12 +1258,12 @@ export default function App() {
     return (
       <div className="startup">
         <Aperture className="spin-slow" size={45} />
-        <span>正在打开你的创作空间</span>
+        <span>{t('正在打开你的创作空间')}</span>
       </div>
     );
   return (
     <div
-      className="app-shell"
+      className="app-shell editorial-app"
       onDragEnter={(e) => {
         if (!e.dataTransfer.types.includes('Files')) return;
         e.preventDefault();
@@ -1250,787 +1289,852 @@ export default function App() {
           setDragging(false);
           if (!user || publicView) {
             requestUpload();
-            tell('进入自己的相册后，请重新选择要上传的照片');
+            tell(t('进入自己的相册后，请重新选择要上传的照片'));
           } else upload(e.dataTransfer.files);
         }
       }}
     >
-      <header className="topbar">
-        <button
-          className="brand"
-          onClick={() => {
-            navigate('/');
-            setTab('projects');
-          }}
-          aria-label="光影相册首页"
-        >
-          <Aperture size={29} />
-          <span>
-            光影<span className="brand-separator">/</span>
-            <small>AI 相册</small>
-          </span>
-        </button>
-        <nav className="main-nav" aria-label="主导航">
+      {path === '/' && (
+        <HomeCover
+          user={user}
+          suspended={!!authIntent || !!previewId}
+          onExplore={() =>
+            document
+              .getElementById('collection')
+              ?.scrollIntoView({
+                behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                  ? 'instant'
+                  : 'smooth',
+              })
+          }
+          onLibrary={() => resetTab('projects')}
+          onFavorites={() =>
+            user ? navigate('/favorites') : requestLogin('workspace', undefined, 'favorites')
+          }
+          onLogin={(register) => requestLogin('login', undefined, undefined, register)}
+        />
+      )}
+      <div className="studio-layout" id="collection">
+        <aside className="studio-sidebar">
           <button
-            className={publicView && !favoritesView ? 'active public-nav' : 'public-nav'}
-            onClick={() => navigate('/')}
+            className="brand"
+            onClick={() => {
+              navigate('/');
+              setTab('projects');
+            }}
+            aria-label={t('光影相册首页')}
           >
-            公共图库
-          </button>
-          <button
-            className={!publicView && tab === 'projects' ? 'active' : ''}
-            onClick={() => resetTab('projects')}
-          >
-            我的相册
-          </button>
-          <button
-            className={!publicView && tab === 'smart' ? 'active' : ''}
-            onClick={() => resetTab('smart')}
-          >
-            智能选片
-          </button>
-          <button
-            className={favoritesView ? 'active' : ''}
-            onClick={() =>
-              user ? navigate('/favorites') : requestLogin('workspace', undefined, 'favorites')
-            }
-          >
-            我的收藏
-          </button>
-          {user && (
-            <button
-              className={!publicView && tab === 'trash' ? 'active' : ''}
-              onClick={() => resetTab('trash')}
-            >
-              回收站
-            </button>
-          )}
-        </nav>
-        <div className="header-actions">
-          {user ? (
-            <>
-              <button
-                className="button button-primary upload-header"
-                onClick={requestUpload}
-                disabled={uploadLocked}
-              >
-                <Upload size={16} />
-                <span>上传照片</span>
-              </button>
-              <div className="user-avatar" title={user.name}>
-                {user.name.slice(0, 1).toUpperCase()}
-              </div>
-              <button
-                className="icon-button logout"
-                title="退出登录"
-                aria-label="退出登录"
-                onClick={async () => {
-                  cancelUpload('已取消本次上传');
-                  try {
-                    await api('/auth/logout', { method: 'POST' });
-                    authEpoch.current++;
-                    setSessionLoading(false);
-                    setUploadErrorsByAlbum({});
-                    setUser(null);
-                    setAlbums([]);
-                    setAlbumId('');
-                    setPhotos([]);
-                    setAlbum(null);
-                    setGalleryPhotos([]);
-                    setAuthIntent(null);
-                    setResumeIntent(null);
-                    setPreviewId(null);
-                    setCreateOpen(false);
-                    setWorking(false);
-                    navigate('/');
-                  } catch (e) {
-                    tell((e as Error).message);
-                  }
-                }}
-              >
-                <LogOut size={17} />
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="button button-secondary upload-header" onClick={requestUpload}>
-                <Upload size={18} />
-                <span>上传照片</span>
-              </button>
-              <button className="button button-primary" onClick={() => requestLogin('login')}>
-                登录 / 注册
-              </button>
-            </>
-          )}
-        </div>
-      </header>
-      <input
-        ref={fileInput}
-        type="file"
-        accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-        multiple
-        hidden
-        onChange={(e) => {
-          if (e.target.files) upload(e.target.files);
-          e.target.value = '';
-        }}
-      />
-      {feedView ? (
-        <main className="explore-page public-gallery">
-          <section
-            className="project-hero gallery-hero"
-            aria-label={favoritesView ? '我的收藏' : '公共图库'}
-          >
-            {galleryPhotos[0] && (
-              <img src={galleryPhotos[0].previewUrl} className="hero-photo" alt="" />
-            )}
-            <div className="hero-shade" />
-            <div className="hero-content">
-              <h1>{favoritesView ? '我的收藏' : '公共图库'}</h1>
-              <p className="hero-description">
-                {favoritesView
-                  ? '把喜欢的作品留在这里，随时回来寻找灵感。'
-                  : '先看见喜欢的作品，再开始自己的创作。'}
-              </p>
-            </div>
-            <span className="gallery-visitor">
-              <Globe size={17} />
-              {user ? '发现摄影作品' : '游客浏览'}
+            <Aperture size={29} />
+            <span>
+              {t('光影')}
+              <span className="brand-separator">/</span>
+              <small>PHOTOGRAPHIC JOURNAL</small>
             </span>
-          </section>
-          <div className="gallery-toolbar">
-            <div className="gallery-tabs" role="group" aria-label="图库内容">
-              {favoritesView ? (
-                <span className="gallery-tab-label">
-                  <Heart size={18} />
-                  已收藏作品
-                </span>
-              ) : (
+          </button>
+          <p className="sidebar-label">LIBRARY</p>
+          <nav className="main-nav" aria-label={t('主导航')}>
+            <button
+              className={publicView && !favoritesView ? 'active public-nav' : 'public-nav'}
+              onClick={() => navigate('/explore')}
+            >
+              {t('公共图库')}
+            </button>
+            <button
+              className={!publicView && tab === 'projects' ? 'active' : ''}
+              onClick={() => resetTab('projects')}
+            >
+              {t('我的相册')}
+            </button>
+            <button
+              className={!publicView && tab === 'smart' ? 'active' : ''}
+              onClick={() => resetTab('smart')}
+            >
+              {t('智能选片')}
+            </button>
+            <button
+              className={favoritesView ? 'active' : ''}
+              onClick={() =>
+                user ? navigate('/favorites') : requestLogin('workspace', undefined, 'favorites')
+              }
+            >
+              {t('我的收藏')}
+            </button>
+            {user && (
+              <button
+                className={!publicView && tab === 'trash' ? 'active' : ''}
+                onClick={() => resetTab('trash')}
+              >
+                {t('回收站')}
+              </button>
+            )}
+          </nav>
+          <div className="sidebar-bottom">
+            <p>{language === 'zh' ? t('每一道光，都值得珍藏。') : 'For the way you see.'}</p>
+            <button
+              className="studio-language"
+              onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')}
+              aria-label={language === 'en' ? t('切换中文') : 'Switch to English'}
+            >
+              <span className={language === 'en' ? 'active' : ''}>EN</span>
+              <span>/</span>
+              <span className={language === 'zh' ? 'active' : ''}>{t('中')}</span>
+            </button>
+          </div>
+        </aside>
+        <div className="studio-content">
+          <header className="studio-header">
+            <span className="studio-breadcrumb">
+              {language === 'zh' ? t('摄影 · 记录 · 分享') : 'PHOTOGRAPHY / YOUR OWN PERSPECTIVE'}
+            </span>
+            <div className="header-actions">
+              {user ? (
                 <>
                   <button
-                    className={gallerySort === 'featured' ? 'active' : ''}
-                    aria-pressed={gallerySort === 'featured'}
-                    onClick={() => setGallerySort('featured')}
+                    className="button button-primary upload-header"
+                    onClick={requestUpload}
+                    disabled={uploadLocked}
                   >
-                    精选作品
+                    <Upload size={16} />
+                    <span>{t('上传照片')}</span>
                   </button>
+                  <div className="user-avatar" title={user.name}>
+                    {user.name.slice(0, 1).toUpperCase()}
+                  </div>
                   <button
-                    className={gallerySort === 'latest' ? 'active' : ''}
-                    aria-pressed={gallerySort === 'latest'}
-                    onClick={() => setGallerySort('latest')}
+                    className="icon-button logout"
+                    title={t('退出登录')}
+                    aria-label={t('退出登录')}
+                    onClick={async () => {
+                      cancelUpload(t('已取消本次上传'));
+                      try {
+                        await api('/auth/logout', { method: 'POST' });
+                        authEpoch.current++;
+                        setSessionLoading(false);
+                        setUploadErrorsByAlbum({});
+                        setUser(null);
+                        setAlbums([]);
+                        setAlbumId('');
+                        setPhotos([]);
+                        setAlbum(null);
+                        setGalleryPhotos([]);
+                        setAuthIntent(null);
+                        setResumeIntent(null);
+                        setPreviewId(null);
+                        setCreateOpen(false);
+                        setWorking(false);
+                        navigate('/');
+                      } catch (e) {
+                        tell((e as Error).message);
+                      }
+                    }}
                   >
-                    最新发布
+                    <LogOut size={17} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className="button button-secondary upload-header" onClick={requestUpload}>
+                    <Upload size={18} />
+                    <span>{t('上传照片')}</span>
+                  </button>
+                  <button className="button button-primary" onClick={() => requestLogin('login')}>
+                    {t('登录')}
                   </button>
                 </>
               )}
             </div>
-            <div className="search-field gallery-search">
-              <Search size={19} />
-              <input
-                aria-label="搜索作品、相册或作者"
-                placeholder="搜索作品、相册或作者"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-              {search && (
-                <button className="icon-button" aria-label="清空搜索" onClick={() => setSearch('')}>
-                  <X size={17} />
-                </button>
-              )}
-            </div>
-          </div>
-          {unavailableFavorites > 0 && favoritesView && (
-            <p className="gallery-notice" role="status">
-              {unavailableFavorites} 张收藏作品已被作者撤回或暂不可用，其他收藏仍可浏览。
-            </p>
-          )}
-          {loadError && (
-            <div className="load-error" role="alert">
-              <p>{loadError}</p>
-              <button className="button button-secondary" onClick={reload}>
-                <RefreshCw size={18} />
-                重试加载
-              </button>
-            </div>
-          )}
-          {loading && !galleryPhotos.length ? (
-            <Loading />
-          ) : visiblePhotos.length ? (
-            <div className="photo-grid public-photo-grid">
-              {visiblePhotos.map((photo) => (
-                <PhotoCard
-                  key={photo.id}
-                  photo={photo}
-                  selected={false}
-                  selecting={false}
-                  readOnly
-                  onOpen={() => openPhoto(photo)}
-                  onSelect={() => {}}
-                  onPick={() => {}}
-                  onFavorite={() => void favoritePhoto(photo)}
-                />
-              ))}
-            </div>
-          ) : !loadError && !loading ? (
-            <Empty
-              icon={favoritesView ? Heart : Globe}
-              title={
-                search
-                  ? '没有找到相关作品'
-                  : favoritesView
-                    ? '把喜欢的作品收藏在这里'
-                    : '好作品，值得被看见'
-              }
-              text={
-                search
-                  ? '试试其他作品名、相册名或作者名称。'
-                  : favoritesView
-                    ? '在公共图库点击收藏，下次就能在这里找到。'
-                    : '作者主动发布后，作品会出现在这里；私人相册不会公开。'
-              }
-            >
-              {favoritesView ? (
-                <button className="button button-secondary" onClick={() => navigate('/')}>
-                  去公共图库看看
-                </button>
-              ) : !search ? (
-                <button className="button button-secondary" onClick={requestUpload}>
-                  上传自己的作品
-                </button>
-              ) : null}
-            </Empty>
-          ) : null}
-          {galleryView && nextCursor && (
-            <div className="gallery-more">
-              <button
-                className="button button-secondary"
-                disabled={loadingMore || loading}
-                onClick={() => void loadMorePhotos()}
-              >
-                {loadingMore && <LoaderCircle size={18} className="spin" />}
-                {loadingMore ? '正在加载' : '加载更多作品'}
-              </button>
-            </div>
-          )}
-        </main>
-      ) : (
-        <>
-          {uploadGuide && !publicView && (
-            <div className="upload-guide" role="status">
-              <div>
-                <strong>准备上传你的照片</strong>
-                <p>
-                  {albumId
-                    ? '请选择本地照片，上传后默认仅你可见。'
-                    : '先创建一个拍摄项目，再选择本地照片。'}
+          </header>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) upload(e.target.files);
+              e.target.value = '';
+            }}
+          />
+          {feedView ? (
+            <main className="explore-page public-gallery">
+              <section className="collection-heading">
+                <p className="eyebrow">
+                  {favoritesView
+                    ? 'YOUR PERSONAL INSPIRATION'
+                    : 'A WORLD SEEN THROUGH DIFFERENT EYES'}
                 </p>
-              </div>
-              <button
-                className="button button-primary"
-                onClick={() => (albumId ? fileInput.current?.click() : setCreateOpen(true))}
-              >
-                {albumId ? '选择照片' : '新建项目并上传'}
-              </button>
-              <button
-                className="icon-button"
-                aria-label="关闭上传引导"
-                onClick={() => setUploadGuide(false)}
-              >
-                <X size={20} />
-              </button>
-            </div>
-          )}
-          {!publicView && tab !== 'trash' && (
-            <div className="album-rail">
-              <span className="rail-label">
-                我的拍摄项目<span>{albums.length.toString().padStart(2, '0')}</span>
-              </span>
-              <div className="album-tabs">
-                {albums.map((a) => (
-                  <button
-                    key={a.id}
-                    className={albumId === a.id ? 'active' : ''}
-                    onClick={() => setAlbumId(a.id)}
-                  >
-                    {a.coverUrl && <img src={a.coverUrl} alt="" />}
-                    <span>{a.title}</span>
-                    {a.isPublic ? <Globe size={12} /> : <LockKeyhole size={12} />}
-                  </button>
-                ))}
-              </div>
-              <button className="rail-create" onClick={() => setCreateOpen(true)}>
-                <Plus size={15} />
-                <span>新建项目</span>
-              </button>
-            </div>
-          )}
-          {loadError ? (
-            <div className="load-error" role="alert">
-              <p>{loadError}</p>
-              <button className="button button-secondary" onClick={reload}>
-                <RefreshCw size={16} />
-                重新加载
-              </button>
-            </div>
-          ) : null}
-          {loading && !album && (publicView || tab !== 'trash') ? (
-            <Loading />
-          ) : (publicView || tab !== 'trash') && album ? (
-            <>
-              <section className={`project-hero ${hero ? '' : 'hero-empty'}`} aria-label="相册大图">
-                {hero && (
-                  <img
-                    key={hero.id}
-                    src={hero.previewUrl || hero.url}
-                    className="hero-photo"
-                    alt={hero.filename}
-                    fetchPriority="high"
-                  />
-                )}
-                <div className="hero-shade" />
-                <div className="hero-content">
-                  <p className="eyebrow">
-                    {publicView
-                      ? 'A PHOTOGRAPHIC JOURNAL'
-                      : `YOUR PROJECT / ${String(Math.max(1, albums.findIndex((a) => a.id === album.id) + 1)).padStart(2, '0')}`}
-                  </p>
-                  <h1>{album.title}</h1>
-                  <p className="hero-description">
-                    {album.description || '用镜头收藏瞬间，让光影讲述故事。'}
-                  </p>
-                  <div className="hero-details">
-                    <span>{formatDate(album.createdAt)}</span>
-                    <span className="tiny-dot" />
-                    <span>
-                      {album.photoCount}
-                      {' 张照片'}
+                <h1>
+                  {language === 'zh'
+                    ? favoritesView
+                      ? t('我的珍藏')
+                      : t('公共图库')
+                    : favoritesView
+                      ? 'Frames worth keeping.'
+                      : 'The public collection.'}
+                </h1>
+                <p>
+                  {language === 'zh'
+                    ? favoritesView
+                      ? t('收藏触动你的作品，让灵感随时回来。')
+                      : t('发现优秀作品，从一个瞬间开启新的故事。')
+                    : favoritesView
+                      ? 'A little collection of everything that moves you.'
+                      : 'Extraordinary moments. A thousand ways of seeing.'}
+                </p>
+              </section>
+              <div className="gallery-toolbar">
+                <div className="gallery-tabs" role="group" aria-label={t('图库内容')}>
+                  {favoritesView ? (
+                    <span className="gallery-tab-label">
+                      <Heart size={18} />
+                      {t('已收藏作品')}
                     </span>
-                    {album.location && (
-                      <>
-                        <span className="tiny-dot" />
-                        <span>{album.location}</span>
-                      </>
-                    )}
-                  </div>
-                  <span className="privacy-label">
-                    {album.isPublic ? <Globe size={14} /> : <LockKeyhole size={14} />}
-                    {album.isPublic ? '公开作品集' : '私密项目'}
-                  </span>
-                  {!publicView && (
-                    <div className="hero-actions">
+                  ) : (
+                    <>
                       <button
-                        className="button button-primary"
-                        disabled={analyzing || !activePhotos.length}
-                        onClick={() => void analyze()}
+                        className={gallerySort === 'featured' ? 'active' : ''}
+                        aria-pressed={gallerySort === 'featured'}
+                        onClick={() => setGallerySort('featured')}
                       >
-                        {analyzing ? (
-                          <LoaderCircle className="spin" size={17} />
-                        ) : (
-                          <Sparkles size={17} />
-                        )}
-                        {analyzing ? `正在分析 ${analysisProgress}` : '开始智能选片'}
-                        {!analyzing && <ArrowUpRight size={17} />}
+                        {t('精选作品')}
                       </button>
                       <button
-                        className="button button-glass"
-                        onClick={() =>
-                          activePhotos.length ? setCoverOpen(true) : fileInput.current?.click()
-                        }
+                        className={gallerySort === 'latest' ? 'active' : ''}
+                        aria-pressed={gallerySort === 'latest'}
+                        onClick={() => setGallerySort('latest')}
                       >
-                        <Settings2 size={16} />
-                        封面与轮播
+                        {t('最新发布')}
                       </button>
-                    </div>
+                    </>
                   )}
                 </div>
-                {!publicView && (
-                  <div className="hero-top-actions">
-                    <button
-                      className="glass-icon"
-                      title="公开作品集设置"
-                      onClick={() => setPublishOpen(true)}
-                    >
-                      <Globe size={16} />
-                      <span>{album.isPublic ? '管理公开作品' : '发布精选作品'}</span>
-                    </button>
-                  </div>
-                )}
-                {activePhotos.length > 0 && (
-                  <div className="hero-controls">
-                    <span className="cover-mode-label">
-                      {album.coverMode === 'slideshow'
-                        ? '照片轮播'
-                        : album.coverMode === 'random'
-                          ? '随机轮播'
-                          : '精选封面'}
-                    </span>
-                    {coverPool.length > 1 && (
-                      <>
-                        <button
-                          className="glass-icon"
-                          aria-label="上一张封面"
-                          onClick={() =>
-                            setHeroIndex((v) => (v - 1 + coverPool.length) % coverPool.length)
-                          }
-                        >
-                          <ChevronLeft size={17} />
-                        </button>
-                        <span className="hero-counter">
-                          {String((heroIndex % coverPool.length) + 1).padStart(2, '0')}
-                          {' / '}
-                          {String(coverPool.length).padStart(2, '0')}
-                        </span>
-                        <button
-                          className="glass-icon"
-                          aria-label="下一张封面"
-                          onClick={() => setHeroIndex((v) => (v + 1) % coverPool.length)}
-                        >
-                          <ChevronRight size={17} />
-                        </button>
-                        {album.coverMode !== 'fixed' && (
-                          <button
-                            className="glass-icon"
-                            aria-label={paused ? '播放轮播' : '暂停轮播'}
-                            onClick={() => setPaused(!paused)}
-                          >
-                            {paused ? <Play size={15} /> : <Pause size={15} />}
-                          </button>
-                        )}
-                      </>
-                    )}
-                    <button
-                      className="glass-icon"
-                      aria-label="预览封面大图"
-                      onClick={() => hero && openPhoto(hero)}
-                    >
-                      <Expand size={17} />
-                    </button>
-                  </div>
-                )}
-                {!publicView && activePhotos.length > 0 && (
-                  <div className="analysis-summary">
-                    <div className="analysis-title">
-                      <ShieldCheck size={17} />
-                      <span>
-                        {analyzing
-                          ? '正在整理你的照片'
-                          : album.analysisStatus === 'complete' ||
-                              activePhotos.some((p) => p.sharpness != null)
-                            ? '分析已完成'
-                            : '等待智能分析'}
-                      </span>
-                    </div>
-                    <div className="analysis-stats">
-                      <button onClick={() => changeFilter('duplicates')}>
-                        <strong>{stats.duplicates}</strong>
-                        <span>重复候选</span>
-                      </button>
-                      <button onClick={() => changeFilter('similar')}>
-                        <strong>{stats.similarGroups}</strong>
-                        <span>相似分组</span>
-                      </button>
-                      <button onClick={() => changeFilter('blur')}>
-                        <strong>{stats.blurry}</strong>
-                        <span>疑似模糊</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </section>
-              <main className="photo-workspace">
-                <div className="workspace-heading">
-                  <div className="section-title">
-                    <h2>{publicView ? '作品影集' : '项目照片'}</h2>
-                    <span>{activePhotos.length}</span>
-                    {loading && <LoaderCircle className="spin" size={16} />}
-                  </div>
-                  <div className="workspace-controls">
-                    <div className="search-field">
-                      <Search size={16} />
-                      <input
-                        placeholder="查找照片"
-                        aria-label="按文件名查找照片"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                      />
-                      {search && (
-                        <button
-                          className="icon-button"
-                          aria-label="清空搜索"
-                          onClick={() => setSearch('')}
-                        >
-                          <X size={13} />
-                        </button>
-                      )}
-                    </div>
-                    <select
-                      className="sort-select"
-                      aria-label="照片排序"
-                      value={sort}
-                      onChange={(e) => setSort(e.target.value)}
-                    >
-                      <option value="date">{publicView ? '作品时间' : '导入时间'}</option>
-                      <option value="name">文件名称</option>
-                      {!publicView && <option value="rating">星级优先</option>}
-                    </select>
-                    <Grid2X2 size={18} className="grid-indicator" />
-                    {!publicView && (
-                      <button
-                        className={`button button-small button-secondary ${selecting ? 'is-active' : ''}`}
-                        onClick={() => {
-                          setSelecting(!selecting);
-                          setSelected(new Set());
-                        }}
-                      >
-                        <CheckCheck size={15} />
-                        {selecting ? '结束选择' : '批量选择'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                {!publicView ? (
-                  <div className="filter-row">
-                    {filters.map((f) => (
-                      <button
-                        key={f.id}
-                        className={filter === f.id ? 'active' : ''}
-                        aria-pressed={filter === f.id}
-                        onClick={() => changeFilter(f.id)}
-                      >
-                        {f.label}
-                        {f.id === 'keep' && stats.kept > 0 && <span>{stats.kept}</span>}
-                      </button>
-                    ))}
-                    <span className="workspace-hint">点击照片进入沉浸预览</span>
-                  </div>
-                ) : (
-                  <div className="public-description">
-                    {album.description || '每张作品，都有一个属于它的故事。'}
-                  </div>
-                )}
-                {uploadErrors.length > 0 && (
-                  <div className="upload-errors" role="alert">
+                <div className="search-field gallery-search">
+                  <Search size={19} />
+                  <input
+                    aria-label={t('搜索作品、相册或作者')}
+                    placeholder={t('搜索作品、相册或作者')}
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                  />
+                  {search && (
                     <button
                       className="icon-button"
-                      aria-label="关闭上传提示"
-                      onClick={() =>
-                        setUploadErrorsByAlbum((current) => ({ ...current, [uploadErrorKey]: [] }))
-                      }
+                      aria-label={t('清空搜索')}
+                      onClick={() => setSearch('')}
                     >
-                      <X size={16} />
+                      <X size={17} />
                     </button>
-                    <strong>部分照片未能上传，可重新选择后重试</strong>
-                    {uploadErrors.slice(0, 8).map((e, i) => (
-                      <p key={i}>{e}</p>
-                    ))}
-                    {uploadErrors.length > 8 && (
-                      <p>
-                        {'还有 '}
-                        {uploadErrors.length - 8}
-                        {' 条提示'}
-                      </p>
-                    )}
-                  </div>
-                )}
-                {visiblePhotos.length ? (
-                  <div className="photo-grid">
-                    {visiblePhotos.map((p) => (
-                      <PhotoCard
-                        key={p.id}
-                        photo={p}
-                        selected={selected.has(p.id)}
-                        selecting={selecting}
-                        readOnly={publicView}
-                        onOpen={() => openPhoto(p)}
-                        onFavorite={() => void favoritePhoto(p)}
-                        onSelect={() => selectPhoto(p.id)}
-                        onPick={() =>
-                          void patchPhoto(p.id, {
-                            pick: p.pick === 'keep' ? 'none' : 'keep',
-                          }).catch((e) => tell(e.message))
-                        }
-                      />
-                    ))}
-                    {!publicView && filter === 'all' && !search && (
-                      <button
-                        className="upload-tile"
-                        onClick={() => fileInput.current?.click()}
-                        disabled={uploadLocked}
-                      >
-                        <ImagePlus size={25} />
-                        <strong>添加更多照片</strong>
-                        <span>拖入照片，或点击上传</span>
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <Empty
-                    icon={activePhotos.length ? Search : ImagePlus}
-                    title={
-                      activePhotos.length ? '这个视角下，还没有照片' : '让第一张照片，开启故事'
-                    }
-                    text={
-                      activePhotos.length
-                        ? '试试其他筛选条件，或先运行一次智能分析。'
-                        : '支持 JPG、PNG、WebP。20MB 以内直接上传，超过 20MB 至 30MB 需本次确认。'
-                    }
-                  >
-                    {!publicView && !activePhotos.length && (
-                      <button
-                        className="button button-primary"
-                        onClick={() => fileInput.current?.click()}
-                        disabled={uploadLocked}
-                      >
-                        <Upload size={16} />
-                        上传照片
-                      </button>
-                    )}
-                  </Empty>
-                )}
-                {!publicView && (
-                  <div className="workspace-footer">
-                    <span>
-                      <LockKeyhole size={12} />
-                      {album.isPublic
-                        ? '仅主动选中的照片已公开，其余照片继续私密'
-                        : '当前项目仅你可见'}
-                    </span>
-                    <span>本地智能筛选仅提供建议，照片由你决定取舍。</span>
-                  </div>
-                )}
-              </main>
-            </>
-          ) : tab === 'trash' && !publicView ? (
-            <main className="trash-page">
-              <div className="section-intro">
-                <p className="eyebrow">NOT EVERY GOODBYE IS FOREVER</p>
-                <h1>回收站</h1>
-                <p className="muted">被移除的照片暂存在这里，恢复后会回到原来的项目。</p>
+                  )}
+                </div>
               </div>
-              {loading ? (
+              {unavailableFavorites > 0 && favoritesView && (
+                <p className="gallery-notice" role="status">
+                  {unavailableFavorites}
+                  {t('张收藏作品已被作者撤回或暂不可用，其他收藏仍可浏览。')}
+                </p>
+              )}
+              {loadError && (
+                <div className="load-error" role="alert">
+                  <p>{t(loadError)}</p>
+                  <button className="button button-secondary" onClick={reload}>
+                    <RefreshCw size={18} />
+                    {t('重试加载')}
+                  </button>
+                </div>
+              )}
+              {loading && !galleryPhotos.length ? (
                 <Loading />
-              ) : photos.length ? (
-                <div className="photo-grid">
-                  {photos.map((p) => (
-                    <article key={p.id} className="photo-card trash-card">
-                      <img
-                        src={p.thumbnailUrl}
-                        alt={p.filename}
-                        width={p.width}
-                        height={p.height}
-                        loading="lazy"
-                      />
-                      <div className="photo-meta">
-                        <span className="filename">{p.filename}</span>
-                        <button
-                          className="text-button"
-                          onClick={() =>
-                            void patchPhoto(p.id, { restore: true })
-                              .then(() => tell('已恢复到原项目'))
-                              .catch((e) => tell(e.message))
-                          }
-                        >
-                          <RefreshCw size={13} />
-                          恢复
-                        </button>
-                      </div>
-                    </article>
+              ) : visiblePhotos.length ? (
+                <div className="photo-grid public-photo-grid">
+                  {visiblePhotos.map((photo) => (
+                    <PhotoCard
+                      key={photo.id}
+                      photo={photo}
+                      selected={false}
+                      selecting={false}
+                      readOnly
+                      onOpen={() => openPhoto(photo)}
+                      onSelect={() => {}}
+                      onPick={() => {}}
+                      onFavorite={() => void favoritePhoto(photo)}
+                    />
                   ))}
                 </div>
-              ) : (
+              ) : !loadError && !loading ? (
                 <Empty
-                  icon={Trash2}
-                  title="回收站是空的"
-                  text="你的每一次选择，都保留着重新考虑的余地。"
-                />
+                  icon={favoritesView ? Heart : Globe}
+                  title={
+                    search
+                      ? t('没有找到相关作品')
+                      : favoritesView
+                        ? t('把喜欢的作品收藏在这里')
+                        : t('好作品，值得被看见')
+                  }
+                  text={
+                    search
+                      ? t('试试其他作品名、相册名或作者名称。')
+                      : favoritesView
+                        ? t('在公共图库点击收藏，下次就能在这里找到。')
+                        : t('作者主动发布后，作品会出现在这里；私人相册不会公开。')
+                  }
+                >
+                  {favoritesView ? (
+                    <button className="button button-secondary" onClick={() => navigate('/')}>
+                      {t('去公共图库看看')}
+                    </button>
+                  ) : !search ? (
+                    <button className="button button-secondary" onClick={requestUpload}>
+                      {t('上传自己的作品')}
+                    </button>
+                  ) : null}
+                </Empty>
+              ) : null}
+              {galleryView && nextCursor && (
+                <div className="gallery-more">
+                  <button
+                    className="button button-secondary"
+                    disabled={loadingMore || loading}
+                    onClick={() => void loadMorePhotos()}
+                  >
+                    {loadingMore && <LoaderCircle size={18} className="spin" />}
+                    {loadingMore ? t('正在加载') : t('加载更多作品')}
+                  </button>
+                </div>
               )}
             </main>
-          ) : publicView ? (
-            <Empty
-              icon={Globe}
-              title="作品集暂不可用"
-              text="作品可能尚未发布或已经撤回，你仍然可以浏览公共图库。"
-            >
-              <button className="button button-secondary" onClick={() => navigate('/')}>
-                返回公共图库
-              </button>
-            </Empty>
-          ) : !loading && !loadError && !publicView ? (
-            <main className="welcome-page">
-              <div className="welcome-decoration">
-                <Aperture size={65} strokeWidth={1} />
-              </div>
-              <p className="eyebrow">YOUR NEXT STORY STARTS HERE</p>
-              <h1>
-                为你的作品，
-                <br />
-                留一个更好的空间。
-              </h1>
-              <p className="muted">
-                创建第一个拍摄项目，上传照片，
-                <br />
-                从相似的瞬间里，找到最动人的一帧。
-              </p>
-              <div className="welcome-actions">
-                <button className="button button-primary" onClick={() => setCreateOpen(true)}>
-                  <FolderPlus size={18} />
-                  新建拍摄项目
-                </button>
-                <button
-                  className="button button-secondary"
-                  disabled={working}
-                  onClick={() => void importDemo()}
+          ) : (
+            <>
+              {uploadGuide && !publicView && (
+                <div className="upload-guide" role="status">
+                  <div>
+                    <strong>{t('准备上传你的照片')}</strong>
+                    <p>
+                      {albumId
+                        ? t('请选择本地照片，上传后默认仅你可见。')
+                        : t('先创建一个拍摄项目，再选择本地照片。')}
+                    </p>
+                  </div>
+                  <button
+                    className="button button-primary"
+                    onClick={() => (albumId ? fileInput.current?.click() : setCreateOpen(true))}
+                  >
+                    {albumId ? t('选择照片') : t('新建项目并上传')}
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label={t('关闭上传引导')}
+                    onClick={() => setUploadGuide(false)}
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+              )}
+              {!publicView && tab !== 'trash' && (
+                <div className="album-rail">
+                  <span className="rail-label">
+                    {t('我的拍摄项目')}
+                    <span>{albums.length.toString().padStart(2, '0')}</span>
+                  </span>
+                  <div className="album-tabs">
+                    {albums.map((a) => (
+                      <button
+                        key={a.id}
+                        className={albumId === a.id ? 'active' : ''}
+                        onClick={() => setAlbumId(a.id)}
+                      >
+                        {a.coverUrl && <img src={a.coverUrl} alt="" />}
+                        <span>{a.title}</span>
+                        {a.isPublic ? <Globe size={12} /> : <LockKeyhole size={12} />}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="rail-create" onClick={() => setCreateOpen(true)}>
+                    <Plus size={15} />
+                    <span>{t('新建项目')}</span>
+                  </button>
+                </div>
+              )}
+              {loadError ? (
+                <div className="load-error" role="alert">
+                  <p>{t(loadError)}</p>
+                  <button className="button button-secondary" onClick={reload}>
+                    <RefreshCw size={16} />
+                    {t('重新加载')}
+                  </button>
+                </div>
+              ) : null}
+              {loading && !album && (publicView || tab !== 'trash') ? (
+                <Loading />
+              ) : (publicView || tab !== 'trash') && album ? (
+                <>
+                  <section
+                    className={`project-hero ${hero ? '' : 'hero-empty'}`}
+                    aria-label={t('相册大图')}
+                  >
+                    {hero && (
+                      <img
+                        key={hero.id}
+                        src={hero.previewUrl || hero.url}
+                        className="hero-photo"
+                        alt={hero.filename}
+                        fetchPriority="high"
+                      />
+                    )}
+                    <div className="hero-shade" />
+                    <div className="hero-content">
+                      <p className="eyebrow">
+                        {publicView
+                          ? 'A PHOTOGRAPHIC JOURNAL'
+                          : `YOUR PROJECT / ${String(Math.max(1, albums.findIndex((a) => a.id === album.id) + 1)).padStart(2, '0')}`}
+                      </p>
+                      <h1>{album.title}</h1>
+                      <p className="hero-description">
+                        {album.description || t('用镜头收藏瞬间，让光影讲述故事。')}
+                      </p>
+                      <div className="hero-details">
+                        <span>{formatDate(album.createdAt)}</span>
+                        <span className="tiny-dot" />
+                        <span>
+                          {album.photoCount}
+                          {t(' 张照片')}
+                        </span>
+                        {album.location && (
+                          <>
+                            <span className="tiny-dot" />
+                            <span>{album.location}</span>
+                          </>
+                        )}
+                      </div>
+                      <span className="privacy-label">
+                        {album.isPublic ? <Globe size={14} /> : <LockKeyhole size={14} />}
+                        {album.isPublic ? t('公开作品集') : t('私密项目')}
+                      </span>
+                      {!publicView && (
+                        <div className="hero-actions">
+                          <button
+                            className="button button-primary"
+                            disabled={analyzing || !activePhotos.length}
+                            onClick={() => void analyze()}
+                          >
+                            {analyzing ? (
+                              <LoaderCircle className="spin" size={17} />
+                            ) : (
+                              <Sparkles size={17} />
+                            )}
+                            {analyzing
+                              ? t('正在分析 {value0}', { value0: String(analysisProgress) })
+                              : t('开始智能选片')}
+                            {!analyzing && <ArrowUpRight size={17} />}
+                          </button>
+                          <button
+                            className="button button-glass"
+                            onClick={() =>
+                              activePhotos.length ? setCoverOpen(true) : fileInput.current?.click()
+                            }
+                          >
+                            <Settings2 size={16} />
+                            {t('封面与轮播')}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {!publicView && (
+                      <div className="hero-top-actions">
+                        <button
+                          className="glass-icon"
+                          title={t('公开作品集设置')}
+                          onClick={() => setPublishOpen(true)}
+                        >
+                          <Globe size={16} />
+                          <span>{album.isPublic ? t('管理公开作品') : t('发布精选作品')}</span>
+                        </button>
+                      </div>
+                    )}
+                    {activePhotos.length > 0 && (
+                      <div className="hero-controls">
+                        <span className="cover-mode-label">
+                          {album.coverMode === 'slideshow'
+                            ? t('照片轮播')
+                            : album.coverMode === 'random'
+                              ? t('随机轮播')
+                              : t('精选封面')}
+                        </span>
+                        {coverPool.length > 1 && (
+                          <>
+                            <button
+                              className="glass-icon"
+                              aria-label={t('上一张封面')}
+                              onClick={() =>
+                                setHeroIndex((v) => (v - 1 + coverPool.length) % coverPool.length)
+                              }
+                            >
+                              <ChevronLeft size={17} />
+                            </button>
+                            <span className="hero-counter">
+                              {String((heroIndex % coverPool.length) + 1).padStart(2, '0')}
+                              {' / '}
+                              {String(coverPool.length).padStart(2, '0')}
+                            </span>
+                            <button
+                              className="glass-icon"
+                              aria-label={t('下一张封面')}
+                              onClick={() => setHeroIndex((v) => (v + 1) % coverPool.length)}
+                            >
+                              <ChevronRight size={17} />
+                            </button>
+                            {album.coverMode !== 'fixed' && (
+                              <button
+                                className="glass-icon"
+                                aria-label={paused ? t('播放轮播') : t('暂停轮播')}
+                                onClick={() => setPaused(!paused)}
+                              >
+                                {paused ? <Play size={15} /> : <Pause size={15} />}
+                              </button>
+                            )}
+                          </>
+                        )}
+                        <button
+                          className="glass-icon"
+                          aria-label={t('预览封面大图')}
+                          onClick={() => hero && openPhoto(hero)}
+                        >
+                          <Expand size={17} />
+                        </button>
+                      </div>
+                    )}
+                    {!publicView && activePhotos.length > 0 && (
+                      <div className="analysis-summary">
+                        <div className="analysis-title">
+                          <ShieldCheck size={17} />
+                          <span>
+                            {analyzing
+                              ? t('正在整理你的照片')
+                              : album.analysisStatus === 'complete' ||
+                                  activePhotos.some((p) => p.sharpness != null)
+                                ? t('分析已完成')
+                                : t('等待智能分析')}
+                          </span>
+                        </div>
+                        <div className="analysis-stats">
+                          <button onClick={() => changeFilter('duplicates')}>
+                            <strong>{stats.duplicates}</strong>
+                            <span>{t('重复候选')}</span>
+                          </button>
+                          <button onClick={() => changeFilter('similar')}>
+                            <strong>{stats.similarGroups}</strong>
+                            <span>{t('相似分组')}</span>
+                          </button>
+                          <button onClick={() => changeFilter('blur')}>
+                            <strong>{stats.blurry}</strong>
+                            <span>{t('疑似模糊')}</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </section>
+                  <main className="photo-workspace">
+                    <div className="workspace-heading">
+                      <div className="section-title">
+                        <h2>{publicView ? t('作品影集') : t('项目照片')}</h2>
+                        <span>{activePhotos.length}</span>
+                        {loading && <LoaderCircle className="spin" size={16} />}
+                      </div>
+                      <div className="workspace-controls">
+                        <div className="search-field">
+                          <Search size={16} />
+                          <input
+                            placeholder={t('查找照片')}
+                            aria-label={t('按文件名查找照片')}
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                          />
+                          {search && (
+                            <button
+                              className="icon-button"
+                              aria-label={t('清空搜索')}
+                              onClick={() => setSearch('')}
+                            >
+                              <X size={13} />
+                            </button>
+                          )}
+                        </div>
+                        <select
+                          className="sort-select"
+                          aria-label={t('照片排序')}
+                          value={sort}
+                          onChange={(e) => setSort(e.target.value)}
+                        >
+                          <option value="date">{publicView ? t('作品时间') : t('导入时间')}</option>
+                          <option value="name">{t('文件名称')}</option>
+                          {!publicView && <option value="rating">{t('星级优先')}</option>}
+                        </select>
+                        <Grid2X2 size={18} className="grid-indicator" />
+                        {!publicView && (
+                          <button
+                            className={`button button-small button-secondary ${selecting ? 'is-active' : ''}`}
+                            onClick={() => {
+                              setSelecting(!selecting);
+                              setSelected(new Set());
+                            }}
+                          >
+                            <CheckCheck size={15} />
+                            {selecting ? t('结束选择') : t('批量选择')}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {!publicView ? (
+                      <div className="filter-row">
+                        {filters.map((f) => (
+                          <button
+                            key={f.id}
+                            className={filter === f.id ? 'active' : ''}
+                            aria-pressed={filter === f.id}
+                            onClick={() => changeFilter(f.id)}
+                          >
+                            {t(f.label)}
+                            {f.id === 'keep' && stats.kept > 0 && <span>{stats.kept}</span>}
+                          </button>
+                        ))}
+                        <span className="workspace-hint">{t('点击照片进入沉浸预览')}</span>
+                      </div>
+                    ) : (
+                      <div className="public-description">
+                        {album.description || t('每张作品，都有一个属于它的故事。')}
+                      </div>
+                    )}
+                    {uploadErrors.length > 0 && (
+                      <div className="upload-errors" role="alert">
+                        <button
+                          className="icon-button"
+                          aria-label={t('关闭上传提示')}
+                          onClick={() =>
+                            setUploadErrorsByAlbum((current) => ({
+                              ...current,
+                              [uploadErrorKey]: [],
+                            }))
+                          }
+                        >
+                          <X size={16} />
+                        </button>
+                        <strong>{t('部分照片未能上传，可重新选择后重试')}</strong>
+                        {uploadErrors.slice(0, 8).map((e, i) => (
+                          <p key={i}>{translateUploadIssue(language, e)}</p>
+                        ))}
+                        {uploadErrors.length > 8 && (
+                          <p>
+                            {t('还有 ')}
+                            {uploadErrors.length - 8}
+                            {t(' 条提示')}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {visiblePhotos.length ? (
+                      <div className="photo-grid">
+                        {visiblePhotos.map((p) => (
+                          <PhotoCard
+                            key={p.id}
+                            photo={p}
+                            selected={selected.has(p.id)}
+                            selecting={selecting}
+                            readOnly={publicView}
+                            onOpen={() => openPhoto(p)}
+                            onFavorite={() => void favoritePhoto(p)}
+                            onSelect={() => selectPhoto(p.id)}
+                            onPick={() =>
+                              void patchPhoto(p.id, {
+                                pick: p.pick === 'keep' ? 'none' : 'keep',
+                              }).catch((e) => tell(e.message))
+                            }
+                          />
+                        ))}
+                        {!publicView && filter === 'all' && !search && (
+                          <button
+                            className="upload-tile"
+                            onClick={() => fileInput.current?.click()}
+                            disabled={uploadLocked}
+                          >
+                            <ImagePlus size={25} />
+                            <strong>{t('添加更多照片')}</strong>
+                            <span>{t('拖入照片，或点击上传')}</span>
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <Empty
+                        icon={activePhotos.length ? Search : ImagePlus}
+                        title={
+                          activePhotos.length
+                            ? t('这个视角下，还没有照片')
+                            : t('让第一张照片，开启故事')
+                        }
+                        text={
+                          activePhotos.length
+                            ? t('试试其他筛选条件，或先运行一次智能分析。')
+                            : t(
+                                '支持 JPG、PNG、WebP。20MB 以内直接上传，超过 20MB 至 30MB 需本次确认。',
+                              )
+                        }
+                      >
+                        {!publicView && !activePhotos.length && (
+                          <button
+                            className="button button-primary"
+                            onClick={() => fileInput.current?.click()}
+                            disabled={uploadLocked}
+                          >
+                            <Upload size={16} />
+                            {t('上传照片')}
+                          </button>
+                        )}
+                      </Empty>
+                    )}
+                    {!publicView && (
+                      <div className="workspace-footer">
+                        <span>
+                          <LockKeyhole size={12} />
+                          {album.isPublic
+                            ? t('仅主动选中的照片已公开，其余照片继续私密')
+                            : t('当前项目仅你可见')}
+                        </span>
+                        <span>{t('本地智能筛选仅提供建议，照片由你决定取舍。')}</span>
+                      </div>
+                    )}
+                  </main>
+                </>
+              ) : tab === 'trash' && !publicView ? (
+                <main className="trash-page">
+                  <div className="section-intro">
+                    <p className="eyebrow">NOT EVERY GOODBYE IS FOREVER</p>
+                    <h1>{t('回收站')}</h1>
+                    <p className="muted">{t('被移除的照片暂存在这里，恢复后会回到原来的项目。')}</p>
+                  </div>
+                  {loading ? (
+                    <Loading />
+                  ) : photos.length ? (
+                    <div className="photo-grid">
+                      {photos.map((p) => (
+                        <article key={p.id} className="photo-card trash-card">
+                          <img
+                            src={p.thumbnailUrl}
+                            alt={p.filename}
+                            width={p.width}
+                            height={p.height}
+                            loading="lazy"
+                          />
+                          <div className="photo-meta">
+                            <span className="filename">{p.filename}</span>
+                            <button
+                              className="text-button"
+                              onClick={() =>
+                                void patchPhoto(p.id, { restore: true })
+                                  .then(() => tell(t('已恢复到原项目')))
+                                  .catch((e) => tell(e.message))
+                              }
+                            >
+                              <RefreshCw size={13} />
+                              {t('恢复')}
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <Empty
+                      icon={Trash2}
+                      title={t('回收站是空的')}
+                      text={t('你的每一次选择，都保留着重新考虑的余地。')}
+                    />
+                  )}
+                </main>
+              ) : publicView ? (
+                <Empty
+                  icon={Globe}
+                  title={t('作品集暂不可用')}
+                  text={t('作品可能尚未发布或已经撤回，你仍然可以浏览公共图库。')}
                 >
-                  {working ? <LoaderCircle className="spin" size={17} /> : <Images size={17} />}
-                  体验示例项目
-                </button>
-              </div>
-              <span className="small-text muted">
-                示例项目使用生成的摄影素材，可在自己的空间内自由体验。
-              </span>
-            </main>
-          ) : null}
-        </>
-      )}
-      <footer className="app-footer">
-        <span>光影 / AI 相册</span>
-        <span>MADE FOR THE WAY YOU SEE.</span>
-        {publicView && (
-          <button className="text-button" onClick={() => navigate('/explore')}>
-            <ArrowLeft size={13} />
-            所有公开作品
-          </button>
-        )}
-      </footer>
+                  <button className="button button-secondary" onClick={() => navigate('/')}>
+                    {t('返回公共图库')}
+                  </button>
+                </Empty>
+              ) : !loading && !loadError && !publicView ? (
+                <main className="welcome-page">
+                  <div className="welcome-decoration">
+                    <Aperture size={65} strokeWidth={1} />
+                  </div>
+                  <p className="eyebrow">YOUR NEXT STORY STARTS HERE</p>
+                  <h1>
+                    {t('为你的作品，')}
+                    <br />
+                    {t('留一个更好的空间。')}
+                  </h1>
+                  <p className="muted">
+                    {t('创建第一个拍摄项目，上传照片，')}
+                    <br />
+                    {t('从相似的瞬间里，找到最动人的一帧。')}
+                  </p>
+                  <div className="welcome-actions">
+                    <button className="button button-primary" onClick={() => setCreateOpen(true)}>
+                      <FolderPlus size={18} />
+                      {t('新建拍摄项目')}
+                    </button>
+                    <button
+                      className="button button-secondary"
+                      disabled={working}
+                      onClick={() => void importDemo()}
+                    >
+                      {working ? <LoaderCircle className="spin" size={17} /> : <Images size={17} />}
+                      {t('体验示例项目')}
+                    </button>
+                  </div>
+                  <span className="small-text muted">
+                    {t('示例项目使用生成的摄影素材，可在自己的空间内自由体验。')}
+                  </span>
+                </main>
+              ) : null}
+            </>
+          )}
+          <footer className="app-footer">
+            <span>{t('光影 / AI 相册')}</span>
+            <span>MADE FOR THE WAY YOU SEE.</span>
+            {publicView && (
+              <button className="text-button" onClick={() => navigate('/explore')}>
+                <ArrowLeft size={13} />
+                {t('所有公开作品')}
+              </button>
+            )}
+          </footer>
+        </div>
+      </div>
       {uploadState && (
         <div className="upload-progress" role="status">
           <div>
             <LoaderCircle className="spin" size={18} />
-            <strong>正在上传照片</strong>
+            <strong>{t('正在上传照片')}</strong>
             <span>{uploadState.percent}%</span>
           </div>
           <div className="progress-track">
             <span style={{ width: `${uploadState.percent}%` }} />
           </div>
           <p>
-            {'请保持页面打开 · 共 '}
+            {t('请保持页面打开 · 共 ')}
             {uploadState.total}
-            {' 张'}
+            {t(' 张')}
           </p>
         </div>
       )}
       {selected.size > 0 && !publicView && (
         <div className="selection-bar">
           <span>
-            {'已选择 '}
+            {t('已选择 ')}
             <strong>{selected.size}</strong>
-            {' 张'}
+            {t(' 张')}
           </span>
           <button
             className="text-button"
             onClick={() => setSelected(new Set(visiblePhotos.map((p) => p.id)))}
           >
-            全选当前结果
+            {t('全选当前结果')}
           </button>
           <span className="selection-divider" />
           <button
@@ -2039,7 +2143,7 @@ export default function App() {
             disabled={working}
           >
             <Globe size={17} />
-            发布所选照片
+            {t('发布所选照片')}
           </button>
           <button
             className="button button-small button-secondary"
@@ -2047,7 +2151,7 @@ export default function App() {
             onClick={() => void bulk({ pick: 'keep' })}
           >
             <Star size={15} />
-            标记保留
+            {t('标记保留')}
           </button>
           <button
             className="button button-small button-danger"
@@ -2055,11 +2159,11 @@ export default function App() {
             disabled={working}
           >
             <Trash2 size={15} />
-            移入回收站
+            {t('移入回收站')}
           </button>
           <button
             className="icon-button"
-            aria-label="清空选择"
+            aria-label={t('清空选择')}
             onClick={() => setSelected(new Set())}
           >
             <X size={18} />
@@ -2069,8 +2173,8 @@ export default function App() {
       {toast && (
         <div className="toast" role="status">
           <Check size={16} />
-          <span>{toast}</span>
-          <button className="icon-button" aria-label="关闭提示" onClick={() => setToast('')}>
+          <span>{t(toast)}</span>
+          <button className="icon-button" aria-label={t('关闭提示')} onClick={() => setToast('')}>
             <X size={14} />
           </button>
         </div>
@@ -2078,8 +2182,11 @@ export default function App() {
       {dragging && (
         <div className="drop-overlay">
           <Upload size={45} />
-          <h2>把这一刻，交给光影</h2>
-          <p>松开鼠标，上传到「{album?.title}」</p>
+          <h2>{t('把这一刻，交给光影')}</h2>
+          <p>
+            {t('松开鼠标，上传到「')}
+            {album?.title}」
+          </p>
         </div>
       )}
       {pendingUpload && (
@@ -2108,7 +2215,7 @@ export default function App() {
             navigate('/library');
             setCreateOpen(false);
             reload();
-            tell('项目已创建，可以上传照片了');
+            tell(t('项目已创建，可以上传照片了'));
           }}
         />
       )}
@@ -2136,6 +2243,7 @@ export default function App() {
           readOnly={publicView}
           currentUserId={user?.id}
           onDownload={(photo) => void requestDownload(photo)}
+          onPostcardExport={requestPostcardExport}
           onFavorite={publicView ? (photo) => void favoritePhoto(photo) : undefined}
           onNavigateAlbum={(photo) => {
             closePreview();
@@ -2160,10 +2268,12 @@ export default function App() {
       {authIntent && (
         <AuthDialog
           intent={authIntent.kind}
+          initialRegister={authRegister}
           photo={(feedView ? galleryPhotos : photos).find(
             (photo) => photo.id === authIntent.photoId,
           )}
           onClose={() => {
+            pendingPostcard.current = null;
             setAuthIntent(null);
             requestAnimationFrame(() => window.scrollTo({ top: authIntent.scrollY }));
           }}
@@ -2184,22 +2294,23 @@ export default function App() {
         />
       )}
       {deleteOpen && (
-        <Modal title="将选中的照片移入回收站？" onClose={() => setDeleteOpen(false)}>
+        <Modal title={t('将选中的照片移入回收站？')} onClose={() => setDeleteOpen(false)}>
           <p className="muted modal-intro">
-            {'选中的 '}
+            {t('选中的 ')}
             {selected.size}
-            {' 张照片会从相册和公开作品集中移除，可以在回收站恢复。'}
+            {t(' 张照片会从相册和公开作品集中移除，可以在回收站恢复。')}
           </p>
           <div className="modal-actions">
             <button className="button button-secondary" onClick={() => setDeleteOpen(false)}>
-              取消
+              {t('取消')}
             </button>
             <button
               className="button button-danger"
               disabled={working}
               onClick={() => void bulk({ deleted: true })}
             >
-              {working && <LoaderCircle className="spin" size={16} />}移入回收站
+              {working && <LoaderCircle className="spin" size={16} />}
+              {t('移入回收站')}
             </button>
           </div>
         </Modal>
@@ -2209,10 +2320,11 @@ export default function App() {
 }
 
 function Loading() {
+  const { t } = useI18n();
   return (
     <div className="loading-state" role="status">
       <LoaderCircle size={25} className="spin" />
-      <span>正在加载照片，首次连接可能需要稍候……</span>
+      <span>{t('正在加载照片，首次连接可能需要稍候……')}</span>
     </div>
   );
 }
@@ -2227,6 +2339,7 @@ function Empty({
   text: string;
   children?: React.ReactNode;
 }) {
+  const { t } = useI18n();
   return (
     <div className="empty-state">
       <Icon size={32} strokeWidth={1.3} />

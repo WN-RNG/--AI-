@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "slides": [
+    {
+      "id": "original-autumn",
+      "title": "STILL MOMENTS",
+      "url": "/covers/original-autumn.webp",
+      "author": "光影 · Original artwork",
+      "source": "Generated with ImageGen for this project",
+      "credit": "Original illustrative artwork · AI generated",
+      "displayOnly": true,
+      "focalPoint": {
+        "x": 50,
+        "y": 50
+      }
+    },
+    {
+      "id": "original-alpine",
+      "title": "LIGHT",
+      "url": "/covers/original-alpine.webp",
+      "author": "光影 · Original artwork",
+      "source": "Generated with ImageGen for this project",
+      "credit": "Original illustrative artwork · AI generated",
+      "displayOnly": true,
+      "focalPoint": {
+        "x": 50,
+        "y": 50
+      }
+    },
+    {
+      "id": "original-coast",
+      "title": "AFTERGLOW",
+      "url": "/covers/original-coast.webp",
+      "author": "光影 · Original artwork",
+      "source": "Generated with ImageGen for this project",
+      "credit": "Original illustrative artwork · AI generated",
+      "displayOnly": true,
+      "focalPoint": {
+        "x": 50,
+        "y": 50
+      }
+    }
+  ]
+}

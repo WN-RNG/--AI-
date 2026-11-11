@@ -1,0 +1,20 @@
+{
+  "tool": "Built-in image_gen",
+  "date": "2026-11-11",
+  "purpose": "Original illustrative fallback assets; not 500px photographs",
+  "common": "Photorealistic natural standalone wide cinematic landscape, full bleed. No UI, text, watermark, frame or people.",
+  "scenes": [
+    {
+      "id": "original-autumn",
+      "prompt": "Golden autumn larch forest, lake, misty mountains in dawn sunlight."
+    },
+    {
+      "id": "original-alpine",
+      "prompt": "Pristine turquoise alpine lake reflecting snow-capped mountains."
+    },
+    {
+      "id": "original-coast",
+      "prompt": "Rugged rocky coastline at twilight with charcoal clouds and thin amber sunset."
+    }
+  ]
+}

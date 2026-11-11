@@ -1,0 +1,15 @@
+{
+  "allowedHosts": [],
+  "slides": [
+    {
+      "id": "autumn",
+      "file": "../licensed-covers/autumn.jpg",
+      "title": "STILL MOMENTS",
+      "subtitle": "A collection of light, quietly observed.",
+      "author": "填写已授权摄影师姓名",
+      "source": "",
+      "credit": "仅用于首页展示",
+      "focalPoint": { "x": 50, "y": 50 }
+    }
+  ]
+}

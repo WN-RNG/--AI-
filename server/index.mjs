@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createApplication } from './app.mjs';
+import { mountCoverAssets } from './coverAssets.mjs';
 
 // 根据此文件的位置定位项目，移动目录后无需写死新的盘符。
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -22,6 +23,7 @@ const { app, close } = await createApplication({
   allowedOrigins,
 });
 const dist = path.join(root, 'dist');
+mountCoverAssets(app, path.join(root, 'public', 'covers'));
 // 构建存在时，提供公开页面 HTML 和静态资源；公开内容经过转义。
 if (existsSync(path.join(dist, 'index.html'))) {
   const shell = await readFile(path.join(dist, 'index.html'), 'utf8');
@@ -95,16 +97,14 @@ if (existsSync(path.join(dist, 'index.html'))) {
     const { photos } = result;
     const content = `<main><a href="/">光影</a><h1>发现摄影作品</h1><p>浏览作者主动发布的照片，发现值得珍藏的光影。</p>${photos.map((photo) => `<figure><a href="/p/${escape(photo.albumSlug)}"><img src="${photo.thumbnailUrl}" alt="${escape(photo.filename)}" width="${photo.width}" height="${photo.height}" loading="lazy"></a><figcaption>${escape(photo.albumTitle)} · ${escape(photo.authorName)}</figcaption></figure>`).join('')}${photos.length ? '' : '<p>当前暂无符合条件的公开作品。</p>'}</main>`;
     res.setHeader('Cache-Control', 'no-store');
-    res
-      .type('html')
-      .send(
-        render(req, {
-          title: '发现摄影作品 · 光影',
-          description: '发现作者主动发布的摄影作品。',
-          content,
-          image: photos[0]?.previewUrl,
-        }),
-      );
+    res.type('html').send(
+      render(req, {
+        title: '发现摄影作品 · 光影',
+        description: '发现作者主动发布的摄影作品。',
+        content,
+        image: photos[0]?.previewUrl,
+      }),
+    );
   });
   app.get('/robots.txt', (_req, res) =>
     res

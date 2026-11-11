@@ -1,8 +1,8 @@
+import { useI18n } from '../i18n';
 import { useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Check, Eye, Globe, LoaderCircle } from 'lucide-react';
 import type { Album, Photo } from '../../shared/types';
 import Modal from './Modal';
-
 type PublishingPhoto = Photo & {
   isPublished?: boolean;
   isFeatured?: boolean;
@@ -21,7 +21,6 @@ export interface PublishDialogProps {
   onClose: () => void;
   onSave: (settings: PublishSettings) => Promise<void>;
 }
-
 export default function PublishDialog({
   album,
   photos,
@@ -29,6 +28,7 @@ export default function PublishDialog({
   onClose,
   onSave,
 }: PublishDialogProps) {
+  const { t } = useI18n();
   const available = useMemo(
     () => photos.filter((photo) => !photo.deletedAt) as PublishingPhoto[],
     [photos],
@@ -55,7 +55,6 @@ export default function PublishDialog({
   const savingRef = useRef(false);
   const selectedPhotos = available.filter((photo) => selectedIds.has(photo.id));
   const hasPublished = available.some((photo) => photo.isPublished) || album.isPublic;
-
   function togglePhoto(id: string) {
     if (savingRef.current) return;
     const adding = !selectedIds.has(id);
@@ -67,18 +66,15 @@ export default function PublishDialog({
     if (adding || !next.size) setAllowDownload(false);
     setError('');
   }
-
   function selectAll() {
     if (savingRef.current) return;
     if (available.some((photo) => !selectedIds.has(photo.id))) setAllowDownload(false);
     setSelectedIds(new Set(available.map((photo) => photo.id)));
     setError('');
   }
-
   function close() {
     if (!savingRef.current) onClose();
   }
-
   async function save(withdraw = false) {
     if (savingRef.current) return;
     const name = title.trim();
@@ -103,18 +99,17 @@ export default function PublishDialog({
       });
       onClose();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '公开设置未保存，请重试。');
+      setError(reason instanceof Error ? reason.message : t('公开设置未保存，请重试。'));
     } finally {
       savingRef.current = false;
       setBusy(false);
     }
   }
-
   return (
-    <Modal title={preview ? '预览公开效果' : '发布精选作品'} wide onClose={close}>
+    <Modal title={preview ? t('预览公开效果') : t('发布精选作品')} wide onClose={close}>
       <div className="publish-dialog" aria-busy={busy}>
         {preview ? (
-          <section className="publish-preview" aria-label="所选照片的公开预览">
+          <section className="publish-preview" aria-label={t('所选照片的公开预览')}>
             <div className="publish-preview-header">
               <button
                 type="button"
@@ -123,14 +118,14 @@ export default function PublishDialog({
                 disabled={busy}
               >
                 <ArrowLeft size={15} />
-                返回修改
+                {t('返回修改')}
               </button>
-              <span>仅预览，尚未保存公开设置</span>
+              <span>{t('仅预览，尚未保存公开设置')}</span>
             </div>
             <h3>{title.trim() || album.publicTitle || album.title}</h3>
             <p className="publish-selection-summary">
-              {selectedPhotos.length} 张公开作品 ·{' '}
-              {allowDownload ? '允许登录后下载展示图' : '未开放下载'}
+              {selectedPhotos.length} {t('张公开作品 ·')}{' '}
+              {allowDownload ? t('允许登录后下载展示图') : t('未开放下载')}
             </p>
             {selectedPhotos.length ? (
               <div className="publish-preview-grid">
@@ -148,16 +143,18 @@ export default function PublishDialog({
                 ))}
               </div>
             ) : (
-              <p className="publish-preview-empty">没有选择公开照片，请返回修改。</p>
+              <p className="publish-preview-empty">{t('没有选择公开照片，请返回修改。')}</p>
             )}
           </section>
         ) : (
           <>
             <p className="publish-dialog-intro">
-              只公开你在这里选中的照片。保存后，未选中的照片会保持或恢复私密，其他人无法从公开作品集中浏览它们。
+              {t(
+                '只公开你在这里选中的照片。保存后，未选中的照片会保持或恢复私密，其他人无法从公开作品集中浏览它们。',
+              )}
             </p>
             <label className="publish-title-field">
-              作品集名称
+              {t('作品集名称')}
               <input
                 value={title}
                 onChange={(event) => {
@@ -167,12 +164,15 @@ export default function PublishDialog({
                 maxLength={120}
                 required
                 disabled={busy}
-                placeholder="为这组作品起一个名字"
+                placeholder={t('为这组作品起一个名字')}
               />
             </label>
             <div className="publish-selection-toolbar">
               <span className="publish-selection-summary" role="status">
-                已选择 {selectedPhotos.length} / {available.length} 张
+                {t('已选择 {selected} / {total} 张', {
+                  selected: selectedPhotos.length,
+                  total: available.length,
+                })}
               </span>
               <div>
                 <button
@@ -181,7 +181,7 @@ export default function PublishDialog({
                   onClick={selectAll}
                   disabled={busy || !available.length}
                 >
-                  选择全部
+                  {t('选择全部')}
                 </button>
                 <button
                   type="button"
@@ -193,11 +193,11 @@ export default function PublishDialog({
                   }}
                   disabled={busy || !selectedPhotos.length}
                 >
-                  清空选择
+                  {t('清空选择')}
                 </button>
               </div>
             </div>
-            <div className="publish-photo-grid" aria-label="选择公开照片">
+            <div className="publish-photo-grid" aria-label={t('选择公开照片')}>
               {available.map((photo) => (
                 <button
                   type="button"
@@ -206,7 +206,7 @@ export default function PublishDialog({
                   onClick={() => togglePhoto(photo.id)}
                   disabled={busy}
                   aria-pressed={selectedIds.has(photo.id)}
-                  aria-label={`${selectedIds.has(photo.id) ? '取消公开' : '选择公开'} ${photo.filename}`}
+                  aria-label={`${selectedIds.has(photo.id) ? t('取消公开') : t('选择公开')} ${photo.filename}`}
                 >
                   <img
                     src={photo.thumbnailUrl}
@@ -225,7 +225,7 @@ export default function PublishDialog({
               ))}
             </div>
             {!available.length && (
-              <p className="publish-dialog-note">当前没有可发布的照片。请先上传照片。</p>
+              <p className="publish-dialog-note">{t('当前没有可发布的照片。请先上传照片。')}</p>
             )}
             <label className="publish-download-consent">
               <input
@@ -235,8 +235,8 @@ export default function PublishDialog({
                 disabled={busy || !selectedPhotos.length}
               />
               <span>
-                允许登录用户下载这些照片的展示图
-                <small>不提供私密原图。新增公开照片后，需要重新勾选此许可。</small>
+                {t('允许登录用户下载这些照片的展示图')}
+                <small>{t('不提供私密原图。新增公开照片后，需要重新勾选此许可。')}</small>
               </span>
             </label>
             <label className="publish-feature-consent">
@@ -247,17 +247,18 @@ export default function PublishDialog({
                 disabled={busy || !selectedPhotos.length}
               />
               <span>
-                同时加入精选作品<small>勾选后，所选照片也会展示在公开的精选作品中。</small>
+                {t('同时加入精选作品')}
+                <small>{t('勾选后，所选照片也会展示在公开的精选作品中。')}</small>
               </span>
             </label>
             <p className="publish-dialog-note">
-              公开内容可被任何人浏览，也可能被搜索引擎收录。请确认你拥有发布这些照片的权利。
+              {t('公开内容可被任何人浏览，也可能被搜索引擎收录。请确认你拥有发布这些照片的权利。')}
             </p>
           </>
         )}
         {error && (
           <p className="form-error" role="alert">
-            {error}
+            {t(error)}
           </p>
         )}
         <div className="publish-dialog-actions">
@@ -268,7 +269,7 @@ export default function PublishDialog({
               onClick={() => void save(true)}
               disabled={busy}
             >
-              撤回全部公开
+              {t('撤回全部公开')}
             </button>
           )}
           <button
@@ -277,7 +278,7 @@ export default function PublishDialog({
             onClick={preview ? () => setPreview(false) : close}
             disabled={busy}
           >
-            {preview ? '返回修改' : '取消'}
+            {preview ? t('返回修改') : t('取消')}
           </button>
           {!preview && (
             <button
@@ -294,7 +295,7 @@ export default function PublishDialog({
               disabled={busy || !selectedPhotos.length}
             >
               <Eye size={16} />
-              预览公开效果
+              {t('预览公开效果')}
             </button>
           )}
           <button
@@ -304,7 +305,9 @@ export default function PublishDialog({
             disabled={busy || !selectedPhotos.length}
           >
             {busy ? <LoaderCircle className="spin" size={16} /> : <Globe size={16} />}
-            {hasPublished ? '保存公开设置' : `确认发布 ${selectedPhotos.length} 张照片`}
+            {hasPublished
+              ? t('保存公开设置')
+              : t('确认发布 {count} 张照片', { count: selectedPhotos.length })}
           </button>
         </div>
       </div>

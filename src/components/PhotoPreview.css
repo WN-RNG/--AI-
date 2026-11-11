@@ -15,6 +15,60 @@
 .pp-overlay * {
   box-sizing: border-box;
 }
+.pp-overlay [hidden] {
+  display: none !important;
+}
+.pp-postcard-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.pp-mode-switch {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 4px;
+  background: #f0ecdf;
+  border: 1px solid #ded7c9;
+  border-radius: 12px;
+}
+.pp-mode-switch button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 17px;
+  font-size: 15px;
+  color: #756b60;
+  background: transparent;
+}
+.pp-mode-switch button.is-active {
+  color: #463f32;
+  background: #fffdf7;
+  box-shadow: 0 2px 6px #342d2610;
+}
+@media (max-width: 1000px) {
+  .pp-mode-switch button {
+    padding-inline: 12px;
+  }
+}
+@media (max-width: 760px) {
+  .pp-header {
+    flex-wrap: wrap;
+  }
+  .pp-mode-switch {
+    order: 3;
+    flex: 1 0 100%;
+    justify-content: center;
+    padding: 3px;
+    margin-top: 7px;
+  }
+  .pp-mode-switch button {
+    flex: 1;
+  }
+  .pp-overlay.is-postcard .pp-shell {
+    overflow: hidden;
+  }
+}
 .pp-overlay button,
 .pp-overlay a {
   -webkit-tap-highlight-color: transparent;

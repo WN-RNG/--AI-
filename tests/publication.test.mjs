@@ -681,6 +681,10 @@ test('production root, explore and legacy-slug HTML render published photos with
     `export { createApplication } from ${JSON.stringify(new URL('../server/app.mjs', import.meta.url).href)};\n`,
   );
   await writeFile(
+    path.join(root, 'server', 'coverAssets.mjs'),
+    `export { mountCoverAssets } from ${JSON.stringify(new URL('../server/coverAssets.mjs', import.meta.url).href)};\n`,
+  );
+  await writeFile(
     path.join(root, 'dist', 'index.html'),
     '<!doctype html><html><head><title>Test</title><meta name="description" content="Test"></head><body><div id="root"></div></body></html>',
   );

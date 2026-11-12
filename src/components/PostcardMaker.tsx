@@ -1,4 +1,4 @@
-/** Postcard controls stay local. Export re-checks permission through the authenticated download API. */
+/** Local composition with optional private Qwen image jobs. Export always re-checks permission. */
 import { useEffect, useRef, useState } from 'react';
 import { Brush, Check, Download, LoaderCircle, RefreshCw } from 'lucide-react';
 import type { Photo } from '../../shared/types';
@@ -10,7 +10,9 @@ import {
   renderPostcard,
   type PaletteColor,
   type PostcardOrientation,
+  type PostcardTemplate,
 } from '../postcard';
+import { usePostcardAI } from '../usePostcardAI';
 import { initialPostcardBlessing, nextPostcardBlessing } from '../postcardBlessings';
 import { loadPostcardFont } from '../fontLoading';
 import './PostcardMaker.css';
@@ -46,7 +48,46 @@ export default function PostcardMaker({
   const aliveRef = useRef(true);
   const exportControllerRef = useRef<AbortController | null>(null);
   const exportingRef = useRef(false);
-  const selected = 'frost' as const;
+  const [selected, setSelected] = useState<PostcardTemplate>('frost');
+  const [consent, setConsent] = useState(false);
+  const ai = usePostcardAI(photo.id, currentUserId);
+  const job = ai.jobs[selected];
+  const [artwork, setArtwork] = useState<{ id: string; image: ImageBitmap } | null>(null);
+  const aiImage =
+    job?.status === 'complete' && artwork?.id === job.id && artwork.image.width > 0
+      ? artwork.image
+      : undefined;
+  const waiting = ai.busy || job?.status === 'queued' || job?.status === 'running';
+  const canRender = selected === 'frost' || !!aiImage;
+
+  useEffect(() => {
+    if (job?.status !== 'complete' || !job.imageUrl) return;
+    const controller = new AbortController();
+    let bitmap: ImageBitmap | undefined;
+    void (async () => {
+      try {
+        const response = await fetch(job.imageUrl!, {
+          credentials: 'same-origin',
+          redirect: 'error',
+          signal: controller.signal,
+        });
+        if (!response.ok) throw Error('AI 图片不可用或作者已撤回许可');
+        bitmap = await createImageBitmap(await response.blob());
+        if (controller.signal.aborted) {
+          bitmap.close();
+          return;
+        }
+        setArtwork({ id: job.id, image: bitmap });
+      } catch (reason) {
+        if (!controller.signal.aborted)
+          setError(reason instanceof Error ? reason.message : 'AI 图片加载失败');
+      }
+    })();
+    return () => {
+      controller.abort();
+      bitmap?.close();
+    };
+  }, [job?.id, job?.status, currentUserId]);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -87,19 +128,20 @@ export default function PostcardMaker({
   }, [photo.id]);
 
   useEffect(() => {
-    if (!source || !previewRef.current) return;
+    if (!source || !previewRef.current || !canRender) return;
     let cancelled = false;
     setRendering(true);
     void (async () => {
       try {
         await loadPostcardFont(caption);
         if (cancelled || !previewRef.current) return;
-        renderPostcard(previewRef.current, source.image, {
+        renderPostcard(previewRef.current, selected === 'watercolor' ? aiImage! : source.image, {
           template: selected,
           orientation,
           longEdge: 1200,
           palette: source.palette,
           caption,
+          background: selected === 'frost' ? aiImage : undefined,
         });
       } catch (reason) {
         if (!cancelled)
@@ -113,10 +155,10 @@ export default function PostcardMaker({
     return () => {
       cancelled = true;
     };
-  }, [source, orientation, caption]);
+  }, [source, orientation, caption, selected, aiImage, canRender]);
 
   function requestExport() {
-    if (!source || !downloadAllowed || exportingRef.current) return;
+    if (!source || !downloadAllowed || !canRender || exportingRef.current) return;
     // Capture the requested configuration; after sign-in the exact same operation resumes once.
     const settings = {
       template: selected,
@@ -139,13 +181,23 @@ export default function PostcardMaker({
       try {
         await loadPostcardFont(settings.caption);
         if (!aliveRef.current || controller.signal.aborted) return;
-        const blob = await authorizedPostcardBlob(photo.id, controller.signal);
+        const blob =
+          selected === 'watercolor' && job?.imageUrl
+            ? await fetch(job.imageUrl, {
+                credentials: 'same-origin',
+                redirect: 'error',
+                signal: controller.signal,
+              }).then((response) => {
+                if (!response.ok) throw Error('AI 图片不可用或下载许可已撤回');
+                return response.blob();
+              })
+            : await authorizedPostcardBlob(photo.id, controller.signal);
         if (!aliveRef.current || controller.signal.aborted) return;
         const fit = Math.min(1, longEdge / Math.max(photo.width, photo.height, 1));
         // Limit the retained decoded surface for very large originals; previews never load originals.
         image = await createImageBitmap(
           blob,
-          photo.width > 0 && photo.height > 0
+          selected !== 'watercolor' && photo.width > 0 && photo.height > 0
             ? {
                 resizeWidth: Math.max(1, Math.round(photo.width * fit)),
                 resizeHeight: Math.max(1, Math.round(photo.height * fit)),
@@ -155,7 +207,10 @@ export default function PostcardMaker({
         );
         if (!aliveRef.current || controller.signal.aborted) return;
         canvas = document.createElement('canvas');
-        renderPostcard(canvas, image, settings);
+        renderPostcard(canvas, image, {
+          ...settings,
+          background: selected === 'frost' ? aiImage : undefined,
+        });
         const result = await encodePostcard(canvas, mime);
         if (!aliveRef.current || controller.signal.aborted) return;
         objectUrl = URL.createObjectURL(result);
@@ -206,10 +261,27 @@ export default function PostcardMaker({
           )}
           <canvas
             ref={previewRef}
-            hidden={!source || loading}
+            hidden={!source || loading || !canRender}
             role="img"
-            aria-label={text('Postcard preview · Immersive frost', '明信片预览 · 沉浸磨砂')}
+            aria-label={
+              selected === 'frost'
+                ? text('Frost postcard preview', '磨砂明信片预览')
+                : text('Watercolor postcard preview', '水彩明信片预览')
+            }
           />
+          {!loading && !canRender && (
+            <p className="pc-loading">
+              {waiting
+                ? text(
+                    'Painting your moment… You can keep browsing.',
+                    '正在转绘此刻，你可以继续浏览。',
+                  )
+                : text(
+                    'Generate your watercolor below to preview it here.',
+                    '点击下方生成按钮，在这里预览真实水彩转绘。',
+                  )}
+            </p>
+          )}
         </div>
         <p className="pc-preview-note">
           {text(
@@ -231,8 +303,9 @@ export default function PostcardMaker({
         >
           <button
             type="button"
-            className="pc-template pc-template-frost is-selected"
-            aria-pressed="true"
+            className={`pc-template pc-template-frost ${selected === 'frost' ? 'is-selected' : ''}`}
+            aria-pressed={selected === 'frost'}
+            onClick={() => setSelected('frost')}
           >
             <span className="pc-template-thumb">
               <img src={photo.thumbnailUrl} alt="" />
@@ -244,23 +317,83 @@ export default function PostcardMaker({
           </button>
           <button
             type="button"
-            className="pc-template pc-template-watercolor"
-            disabled
+            className={`pc-template pc-template-watercolor ${selected === 'watercolor' ? 'is-selected' : ''}`}
+            aria-pressed={selected === 'watercolor'}
+            onClick={() => setSelected('watercolor')}
             aria-describedby="pc-watercolor-note"
           >
             <span className="pc-template-thumb">
               <Brush size={27} />
             </span>
             <span className="pc-template-name">{text('Watercolor art', '水彩艺术')}</span>
-            <span className="pc-template-tag">{text('Coming later', '待接入')}</span>
+            <span className="pc-template-tag">Qwen AI</span>
           </button>
         </div>
         <p id="pc-watercolor-note" className="pc-style-note">
           {text(
-            'True watercolor painting will be available after an image model is connected.',
-            '真实水彩转绘将在接入图像模型后开放。',
+            'Frost keeps your photo intact. Watercolor repaints a copy; your original stays safe.',
+            '摄影款保留原照片，AI 只生成背景；水彩款转绘照片副本，原文件保持不变。',
           )}
         </p>
+        <div className="pc-ai-panel">
+          {!ai.config.enabled && (
+            <p>
+              {text(
+                'An administrator needs to configure the Qwen API key.',
+                '管理员尚需配置 Qwen API 密钥，当前可使用本地磨砂。',
+              )}
+            </p>
+          )}
+          {!currentUserId && (
+            <p>{text('Sign in before using AI generation.', '登录后可使用 AI 生成。')}</p>
+          )}
+          <label className="pc-ai-consent">
+            <input
+              type="checkbox"
+              checked={consent}
+              onChange={(event) => setConsent(event.target.checked)}
+            />
+            {text(
+              'Send a smaller photo copy to Qwen for this creation.',
+              '同意将照片的缩小副本发送至千问，用于本次生成。',
+            )}
+          </label>
+          <button
+            className="pc-export"
+            type="button"
+            onClick={() => void ai.generate(selected)}
+            disabled={
+              !ai.config.enabled ||
+              !currentUserId ||
+              !downloadAllowed ||
+              !consent ||
+              waiting ||
+              job?.status === 'complete' ||
+              job?.status === 'failed' ||
+              job?.status === 'interrupted'
+            }
+          >
+            {waiting ? <LoaderCircle className="pp-spin" size={16} /> : <Brush size={16} />}
+            {waiting
+              ? text('Creating…', '正在生成…')
+              : job?.status === 'complete'
+                ? text('Saved result · reused', '已生成 · 复用结果')
+                : selected === 'frost'
+                  ? text('Generate soft-light background', '生成柔雾光影背景')
+                  : text('Paint in watercolor', '生成水彩明信片')}
+          </button>
+          <small>
+            {text(
+              `Up to ¥${ai.config.monthlyBudgetCny}/month across this site; each new image reserves ¥${ai.config.reservePerImageCny}. About two minutes, sometimes longer.`,
+              `全站每月上限 ¥${ai.config.monthlyBudgetCny}；每次新生成预留 ¥${ai.config.reservePerImageCny}。通常需等待，可能超过两分钟。`,
+            )}
+          </small>
+          {(ai.error || job?.error) && (
+            <p className="pc-error" role="alert">
+              {ai.error || job?.error}
+            </p>
+          )}
+        </div>
         <div className="pc-blessing-heading">
           <span>{text('A wish for this moment', '为此刻写一句祝福')}</span>
           <button
@@ -347,15 +480,15 @@ export default function PostcardMaker({
           type="button"
           className="pc-export"
           onClick={requestExport}
-          disabled={!source || !downloadAllowed || exporting || loading || rendering}
+          disabled={!source || !downloadAllowed || !canRender || exporting || loading || rendering}
         >
           {exporting ? <LoaderCircle size={18} className="pp-spin" /> : <Download size={18} />}
           {exporting ? text('Preparing…', '正在生成…') : text('Export postcard', '导出明信片')}
         </button>
         <p className="pc-privacy-note">
           {text(
-            'Rendered on your device. No AI service or extra fee.',
-            '在你的设备中生成，不调用 AI 服务，不产生额外费用。',
+            'Local composition. AI generation uses the site’s model budget.',
+            '排版与文字在本地合成，AI 生成会消耗网站的模型额度。',
           )}
         </p>
       </div>

@@ -17,7 +17,10 @@ import {
 import { promisify } from 'node:util';
 import { mkdir, readdir, rename, rm, stat, copyFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { mountPostcardAI } from './postcardAI.mjs';
+import { createPreviewWorker } from './previewWorker.mjs';
 import {
   UPLOAD_CONFIRM_BYTES,
   UPLOAD_MAX_BYTES,
@@ -50,7 +53,12 @@ const textValue = (value, max, label, fallback = '') => {
 };
 
 /** All files are private on disk. Public image routes explicitly check publication. */
-export async function createApplication({ dataDir, demoDir, allowedOrigins = [] } = {}) {
+export async function createApplication({
+  dataDir,
+  demoDir,
+  allowedOrigins = [],
+  postcardAIOptions = {},
+} = {}) {
   if (!dataDir) throw new Error('createApplication requires dataDir');
   dataDir = path.resolve(dataDir);
   const dirs = Object.fromEntries(
@@ -248,7 +256,7 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
   const albumJSON = (row) => {
     const active = db
       .prepare(
-        'SELECT * FROM photos WHERE album_id=? AND deleted_at IS NULL ORDER BY created_at,id',
+        'SELECT id FROM photos WHERE album_id=? AND deleted_at IS NULL ORDER BY created_at,id',
       )
       .all(row.id);
     const covers = JSON.parse(row.cover_photo_ids).filter((id) =>
@@ -258,6 +266,13 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
       active.find((photo) => photo.id === row.cover_photo_id) ||
       active.find((photo) => covers.includes(photo.id)) ||
       active[0];
+    const stats = db
+      .prepare(
+        `SELECT COUNT(duplicate_of) AS duplicates,COUNT(DISTINCT group_id) AS similarGroups,
+      COALESCE(SUM(blur),0) AS blurry,COALESCE(SUM(pick='keep'),0) AS kept
+      FROM photos WHERE album_id=? AND deleted_at IS NULL`,
+      )
+      .get(row.id);
     return {
       id: row.id,
       title: row.title,
@@ -276,12 +291,7 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
       coverUrl: cover ? `/api/photos/${cover.id}/preview` : null,
       analysisStatus: row.analysis_status,
       publicTitle: row.public_title,
-      stats: {
-        duplicates: active.filter((p) => p.duplicate_of).length,
-        similarGroups: new Set(active.map((p) => p.group_id).filter(Boolean)).size,
-        blurry: active.filter((p) => p.blur).length,
-        kept: active.filter((p) => p.pick === 'keep').length,
-      },
+      stats,
     };
   };
   const publishedCondition = 'p.is_published=1 AND p.deleted_at IS NULL AND a.is_public=1';
@@ -450,11 +460,11 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
   };
   // One shared permit covers upload decoding, analysis and demo transformations.
   // sharp.concurrency(1) alone only limits threads *within* each native job.
-  const runImageTask = (run) => {
+  const runImageTask = (run, urgent = false) => {
     if (closed) return Promise.reject(closingError());
     if (imageRunning && imageJobs.length >= IMAGE_WAIT_LIMIT) return Promise.reject(busyError());
     return new Promise((resolve, reject) => {
-      imageJobs.push({ run, resolve, reject });
+      imageJobs[urgent ? 'unshift' : 'push']({ run, resolve, reject });
       void drainImageJobs();
     });
   };
@@ -584,6 +594,23 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
     res.json({ ok: true });
   });
   // 相册接口：只允许当前用户读写自己的项目与封面配置。
+  app.get('/api/workspace', requireUser, (req, res) => {
+    const rows = db
+      .prepare('SELECT * FROM albums WHERE user_id=? ORDER BY created_at DESC,id DESC')
+      .all(req.user.id);
+    res.json({
+      albums: rows.map(albumJSON),
+      album: rows[0] ? albumJSON(rows[0]) : null,
+      photos: rows[0]
+        ? db
+            .prepare(
+              'SELECT * FROM photos WHERE album_id=? AND deleted_at IS NULL ORDER BY created_at,id',
+            )
+            .all(rows[0].id)
+            .map(photoJSON)
+        : [],
+    });
+  });
   app.get('/api/albums', requireUser, (req, res) =>
     res.json({
       albums: db
@@ -812,13 +839,8 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
         const digest = await fileDigest(tempPath);
         await sharp(tempPath, { limitInputPixels: MAX_PIXELS, failOn: 'error' })
           .rotate()
-          .resize({ width: 3200, height: 3200, fit: 'inside', withoutEnlargement: true })
-          .webp({ quality: 90 })
-          .toFile(paths[1]);
-        await sharp(tempPath, { limitInputPixels: MAX_PIXELS, failOn: 'error' })
-          .rotate()
           .resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true })
-          .webp({ quality: 82 })
+          .webp({ quality: 82, effort: 1 })
           .toFile(paths[2]);
         await rename(tempPath, paths[0]);
         const swapped = [5, 6, 7, 8].includes(metadata.orientation);
@@ -841,12 +863,13 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
           timestamp(),
           digest,
         );
+        previewWorker.enqueue(id);
         return db.prepare('SELECT * FROM photos WHERE id=?').get(id);
       } catch (error) {
         await Promise.all(paths.map((file) => rm(file, { force: true }).catch(() => {})));
         throw error;
       }
-    });
+    }, true);
   app.post(
     '/api/albums/:id/photos',
     requireUser,
@@ -1021,11 +1044,13 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
         if (download && !isOwner && !photo.allow_download)
           throw problem(403, '作者未开放这张照片的下载许可');
         const original = isOwner && (kind === 'file' || download);
-        const filename = original
+        let filename = original
           ? path.join(dirs.originals, `${photo.id}.${photo.extension}`)
           : kind === 'thumb' && !download
             ? path.join(dirs.thumbs, `${photo.id}.webp`)
             : path.join(dirs.previews, `${photo.id}.webp`);
+        if (!original && !(kind === 'thumb' && !download) && !existsSync(filename))
+          filename = path.join(dirs.thumbs, `${photo.id}.webp`);
         res.setHeader('Cache-Control', 'private, no-store');
         res.setHeader('Content-Type', original ? photo.mime : 'image/webp');
         if (download) {
@@ -1341,6 +1366,33 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
       }),
     ),
   );
+  const previewWorker = createPreviewWorker({ db, dirs, runImageTask });
+  const postcardAI = await mountPostcardAI({
+    app,
+    db,
+    dataDir,
+    requireUser,
+    asyncRoute,
+    runImageTask,
+    ...postcardAIOptions,
+    authorize(id, userId) {
+      const photo = db
+        .prepare(
+          'SELECT p.*,a.user_id,a.is_public FROM photos p JOIN albums a ON a.id=p.album_id WHERE p.id=?',
+        )
+        .get(id);
+      if (!photo || photo.deleted_at) throw problem(404, '照片不存在');
+      const owner = photo.user_id === userId;
+      if (!owner && !(photo.is_public && photo.is_published && photo.allow_download))
+        throw problem(403, '作者未开放照片的制作与下载许可');
+      const preview = path.join(dirs.previews, `${photo.id}.webp`);
+      return owner
+        ? path.join(dirs.originals, `${photo.id}.${photo.extension}`)
+        : existsSync(preview)
+          ? preview
+          : path.join(dirs.thumbs, `${photo.id}.webp`);
+    },
+  });
   app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在' }));
   app.use((error, _req, res, _next) => {
     if (res.headersSent) return res.end();
@@ -1373,6 +1425,8 @@ export async function createApplication({ dataDir, demoDir, allowedOrigins = [] 
     async close() {
       if (!closing)
         closing = (async () => {
+          await postcardAI.close();
+          await previewWorker.close();
           closed = true;
           queue.length = 0;
           for (const job of imageJobs.splice(0)) job.reject(closingError());

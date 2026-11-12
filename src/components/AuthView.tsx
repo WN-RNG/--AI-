@@ -18,9 +18,16 @@ export function AuthForm({
   onModeChange,
   initialRegister = false,
 }: AuthFormProps) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [register, setRegister] = useState(initialRegister);
   const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  useEffect(() => {
+    setWaiting(false);
+    if (!busy) return;
+    const timer = setTimeout(() => setWaiting(true), 8000);
+    return () => clearTimeout(timer);
+  }, [busy]);
   const [error, setError] = useState('');
   const [values, setValues] = useState({ name: '', email: '', password: '', inviteCode: '' });
   const requestRef = useRef<AbortController | null>(null);
@@ -114,6 +121,13 @@ export function AuthForm({
               disabled={busy}
             />
           </label>
+        )}
+        {waiting && (
+          <p className="muted" role="status">
+            {language === 'en'
+              ? 'Waiting for the server. The free instance may be waking up; please keep this page open.'
+              : '正在等待服务器响应。免费服务可能正在唤醒，请保持页面打开。'}
+          </p>
         )}
         {error && (
           <p className="form-error" role="alert">

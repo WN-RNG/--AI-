@@ -73,6 +73,7 @@ type UploadJob = {
   started: boolean;
   phase: 'confirming' | 'uploading';
   xhr: XMLHttpRequest | null;
+  xhrs?: Set<XMLHttpRequest>;
 };
 type UploadResult = {
   photos: Photo[];
@@ -347,6 +348,9 @@ export default function App() {
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('date');
+  const [renderLimit, setRenderLimit] = useState(48);
+  const bootstrapRef = useRef<{ userId: string; album: Album; photos: Photo[] } | null>(null);
+  useEffect(() => setRenderLimit(48), [albumId, filter, search, sort, path]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
   const [previewId, setPreviewId] = useState<string | null>(null);
@@ -363,6 +367,7 @@ export default function App() {
     percent: number;
     current: number;
     total: number;
+    processing?: boolean;
   } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [toast, setToast] = useState('');
@@ -414,6 +419,7 @@ export default function App() {
       job.cancelled = true;
       uploadJobRef.current = null;
       job.xhr?.abort();
+      job.xhrs?.forEach((xhr) => xhr.abort());
       setPendingUpload(null);
       setUploadLocked(false);
       setUploadState(null);
@@ -447,6 +453,7 @@ export default function App() {
         job.cancelled = true;
         uploadJobRef.current = null;
         job.xhr?.abort();
+        job.xhrs?.forEach((xhr) => xhr.abort());
       }
     },
     [],
@@ -478,10 +485,16 @@ export default function App() {
   useEffect(() => {
     if (!user || publicView) return;
     const controller = new AbortController();
-    api<{ albums: Album[] }>('/albums', { signal: controller.signal })
+    const bootstrap = !albumId && tab === 'projects';
+    api<{ albums: Album[]; album?: Album; photos?: Photo[] }>(
+      bootstrap ? '/workspace' : '/albums',
+      { signal: controller.signal },
+    )
       .then((data) => {
         if (controller.signal.aborted) return;
         if (!Array.isArray(data.albums)) throw new Error(t('相册列表响应异常，请稍后重试'));
+        if (bootstrap && data.album && Array.isArray(data.photos))
+          bootstrapRef.current = { userId: user.id, album: data.album, photos: data.photos };
         setAlbums(data.albums);
         setAlbumId((current) =>
           data.albums.some((a) => a.id === current) ? current : data.albums[0]?.id || '',
@@ -500,6 +513,21 @@ export default function App() {
       return;
     }
     const controller = new AbortController();
+    const snapshot = bootstrapRef.current;
+    bootstrapRef.current = null;
+    if (
+      !publicView &&
+      tab === 'projects' &&
+      snapshot?.userId === user?.id &&
+      snapshot?.album.id === albumId
+    ) {
+      setLoadedPath(path);
+      setLoadedScope(contextKey);
+      setAlbum(snapshot.album);
+      setPhotos(snapshot.photos);
+      setLoading(false);
+      return () => controller.abort();
+    }
     setLoading(true);
     setLoadError('');
     const url = publicSlug
@@ -823,86 +851,111 @@ export default function App() {
     const batches = createUploadBatches(job.selection.files, allowLargeFiles);
     const total = batches.reduce((count, batch) => count + batch.files.length, 0);
     let processed = 0;
+    let batchIndex = 0;
+    job.xhrs = new Set();
+    const progress = batches.map((batch) => ({
+      bytes: batch.files.reduce((sum, file) => sum + file.size, 0),
+      sent: 0,
+      finished: false,
+    }));
+    const updateProgress = () => {
+      if (!uploadContextIsCurrent(job)) return;
+      const bytes = progress.reduce((sum, p) => sum + p.bytes, 0);
+      const sent = progress.reduce((sum, p) => sum + p.sent, 0);
+      setUploadState({
+        percent: Math.min(
+          processed === total ? 100 : 99,
+          Math.round((sent / Math.max(bytes, 1)) * 100),
+        ),
+        current: processed,
+        total,
+        processing: progress.some((p) => !p.finished && p.sent >= p.bytes),
+      });
+    };
     setUploadState({ percent: 0, current: 0, total });
     try {
-      for (const batch of batches) {
-        if (!uploadContextIsCurrent(job)) break;
-        const form = new FormData();
-        // Multer consumes fields in multipart order: consent must precede the photo parts.
-        if (batch.allowLargeFiles) form.append('allowLargeFiles', 'true');
-        batch.files.forEach((file) => form.append('photos', file));
-        try {
-          const result = await new Promise<UploadResult>((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            job.xhr = xhr;
-            const cleanup = () => {
-              if (job.xhr === xhr) job.xhr = null;
-              xhr.upload.onprogress = null;
-              xhr.onload = xhr.onerror = xhr.ontimeout = xhr.onabort = null;
-            };
-            const fail = (error: Error) => {
-              cleanup();
-              reject(error);
-            };
-            xhr.open('POST', `/api/albums/${job.albumId}/photos`);
-            xhr.setRequestHeader('X-Album-Client', '1');
-            xhr.upload.onprogress = (event) => {
-              if (!uploadContextIsCurrent(job)) return;
-              const fraction =
-                event.lengthComputable && event.total > 0
-                  ? Math.min(1, event.loaded / event.total)
-                  : 0;
-              setUploadState({
-                percent: Math.round(((processed + fraction * batch.files.length) / total) * 100),
-                current: processed,
-                total,
-              });
-            };
-            xhr.onload = () => {
-              let response;
-              try {
-                response = JSON.parse(xhr.responseText);
-              } catch {
-                fail(new Error(t('服务响应异常，请稍后重试')));
-                return;
-              }
-              if (
-                Array.isArray(response?.photos) &&
-                ((xhr.status >= 200 && xhr.status < 300) ||
-                  (xhr.status === 400 && Array.isArray(response?.errors)))
-              ) {
+      const worker = async () => {
+        for (;;) {
+          const index = batchIndex++;
+          const batch = batches[index];
+          if (!batch) break;
+          if (!uploadContextIsCurrent(job)) break;
+          const form = new FormData();
+          // Multer consumes fields in multipart order: consent must precede the photo parts.
+          if (batch.allowLargeFiles) form.append('allowLargeFiles', 'true');
+          batch.files.forEach((file) => form.append('photos', file));
+          try {
+            const result = await new Promise<UploadResult>((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              job.xhr = xhr;
+              job.xhrs!.add(xhr);
+              const cleanup = () => {
+                if (job.xhr === xhr) job.xhr = null;
+                job.xhrs?.delete(xhr);
+                xhr.upload.onprogress = null;
+                xhr.onload = xhr.onerror = xhr.ontimeout = xhr.onabort = null;
+              };
+              const fail = (error: Error) => {
                 cleanup();
-                resolve(response);
-              } else fail(new Error(response?.error || t('上传失败，请重试')));
-            };
-            xhr.onerror = () =>
-              fail(new Error(t('连接中断，请先检查上传结果，再重试未完成的照片')));
-            xhr.onabort = () => fail(new DOMException(t('本次上传已取消'), 'AbortError'));
-            xhr.timeout = batch.allowLargeFiles ? 300000 : 180000;
-            xhr.ontimeout = () =>
-              fail(new Error(t('上传超时，请先检查上传结果，再重试未完成的照片')));
-            xhr.send(form);
-          });
-          job.uploaded += result.photos.length;
-          if (Array.isArray(result.errors))
-            result.errors.forEach((error) =>
-              job.failures.push(`${error.filename || t('照片')}：${error.error || t('上传失败')}`),
-            );
-        } catch (error) {
-          if (job.cancelled) break;
-          const message = error instanceof Error ? error.message : t('上传失败，请重试');
-          batch.files.forEach((file) => job.failures.push(`${file.name}：${message}`));
+                reject(error);
+              };
+              xhr.open('POST', `/api/albums/${job.albumId}/photos`);
+              xhr.setRequestHeader('X-Album-Client', '1');
+              xhr.upload.onprogress = (event) => {
+                if (!uploadContextIsCurrent(job)) return;
+                const fraction =
+                  event.lengthComputable && event.total > 0
+                    ? Math.min(1, event.loaded / event.total)
+                    : 0;
+                progress[index].sent = Math.round(fraction * progress[index].bytes);
+                updateProgress();
+              };
+              xhr.onload = () => {
+                let response;
+                try {
+                  response = JSON.parse(xhr.responseText);
+                } catch {
+                  fail(new Error(t('服务响应异常，请稍后重试')));
+                  return;
+                }
+                if (
+                  Array.isArray(response?.photos) &&
+                  ((xhr.status >= 200 && xhr.status < 300) ||
+                    (xhr.status === 400 && Array.isArray(response?.errors)))
+                ) {
+                  cleanup();
+                  resolve(response);
+                } else fail(new Error(response?.error || t('上传失败，请重试')));
+              };
+              xhr.onerror = () =>
+                fail(new Error(t('连接中断，请先检查上传结果，再重试未完成的照片')));
+              xhr.onabort = () => fail(new DOMException(t('本次上传已取消'), 'AbortError'));
+              xhr.timeout = batch.allowLargeFiles ? 300000 : 180000;
+              xhr.ontimeout = () =>
+                fail(new Error(t('上传超时，请先检查上传结果，再重试未完成的照片')));
+              xhr.send(form);
+            });
+            job.uploaded += result.photos.length;
+            if (Array.isArray(result.errors))
+              result.errors.forEach((error) =>
+                job.failures.push(
+                  `${error.filename || t('照片')}：${error.error || t('上传失败')}`,
+                ),
+              );
+          } catch (error) {
+            if (job.cancelled) break;
+            const message = error instanceof Error ? error.message : t('上传失败，请重试');
+            batch.files.forEach((file) => job.failures.push(`${file.name}：${message}`));
+          }
+          processed += batch.files.length;
+          progress[index].finished = true;
+          if (!uploadContextIsCurrent(job)) break;
+          recordUploadErrors(job, job.failures);
+          updateProgress();
+          reload();
         }
-        processed += batch.files.length;
-        if (!uploadContextIsCurrent(job)) break;
-        recordUploadErrors(job, job.failures);
-        setUploadState({
-          percent: Math.round((processed / total) * 100),
-          current: processed,
-          total,
-        });
-        reload();
-      }
+      };
+      await Promise.all([worker(), worker()]);
     } catch (error) {
       if (!job.cancelled) {
         const message = error instanceof Error ? error.message : t('请重新选择未完成的照片');
@@ -1930,36 +1983,48 @@ export default function App() {
                       </div>
                     )}
                     {visiblePhotos.length ? (
-                      <div className="photo-grid">
-                        {visiblePhotos.map((p) => (
-                          <PhotoCard
-                            key={p.id}
-                            photo={p}
-                            selected={selected.has(p.id)}
-                            selecting={selecting}
-                            readOnly={publicView}
-                            onOpen={() => openPhoto(p)}
-                            onFavorite={() => void favoritePhoto(p)}
-                            onSelect={() => selectPhoto(p.id)}
-                            onPick={() =>
-                              void patchPhoto(p.id, {
-                                pick: p.pick === 'keep' ? 'none' : 'keep',
-                              }).catch((e) => tell(e.message))
-                            }
-                          />
-                        ))}
-                        {!publicView && filter === 'all' && !search && (
+                      <>
+                        <div className="photo-grid">
+                          {visiblePhotos.slice(0, renderLimit).map((p) => (
+                            <PhotoCard
+                              key={p.id}
+                              photo={p}
+                              selected={selected.has(p.id)}
+                              selecting={selecting}
+                              readOnly={publicView}
+                              onOpen={() => openPhoto(p)}
+                              onFavorite={() => void favoritePhoto(p)}
+                              onSelect={() => selectPhoto(p.id)}
+                              onPick={() =>
+                                void patchPhoto(p.id, {
+                                  pick: p.pick === 'keep' ? 'none' : 'keep',
+                                }).catch((e) => tell(e.message))
+                              }
+                            />
+                          ))}
+                          {!publicView && filter === 'all' && !search && (
+                            <button
+                              className="upload-tile"
+                              onClick={() => fileInput.current?.click()}
+                              disabled={uploadLocked}
+                            >
+                              <ImagePlus size={25} />
+                              <strong>{t('添加更多照片')}</strong>
+                              <span>{t('拖入照片，或点击上传')}</span>
+                            </button>
+                          )}
+                        </div>
+                        {visiblePhotos.length > renderLimit && (
                           <button
-                            className="upload-tile"
-                            onClick={() => fileInput.current?.click()}
-                            disabled={uploadLocked}
+                            className="button button-secondary"
+                            onClick={() => setRenderLimit((value) => value + 48)}
                           >
-                            <ImagePlus size={25} />
-                            <strong>{t('添加更多照片')}</strong>
-                            <span>{t('拖入照片，或点击上传')}</span>
+                            {language === 'en'
+                              ? `Show more · ${renderLimit} / ${visiblePhotos.length}`
+                              : `加载更多 · ${renderLimit} / ${visiblePhotos.length}`}
                           </button>
                         )}
-                      </div>
+                      </>
                     ) : (
                       <Empty
                         icon={activePhotos.length ? Search : ImagePlus}
@@ -2128,16 +2193,22 @@ export default function App() {
         <div className="upload-progress" role="status">
           <div>
             <LoaderCircle className="spin" size={18} />
-            <strong>{t('正在上传照片')}</strong>
+            <strong>
+              {uploadState.processing
+                ? language === 'en'
+                  ? 'Preparing thumbnails'
+                  : '正在校验与生成缩略图'
+                : t('正在上传照片')}
+            </strong>
             <span>{uploadState.percent}%</span>
           </div>
           <div className="progress-track">
             <span style={{ width: `${uploadState.percent}%` }} />
           </div>
           <p>
-            {t('请保持页面打开 · 共 ')}
-            {uploadState.total}
-            {t(' 张')}
+            {language === 'en'
+              ? `Ready ${uploadState.current} / ${uploadState.total} · Keep this page open`
+              : `已完成 ${uploadState.current} / ${uploadState.total} 张 · 请保持页面打开`}
           </p>
         </div>
       )}

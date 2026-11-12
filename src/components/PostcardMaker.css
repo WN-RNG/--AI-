@@ -128,8 +128,7 @@
   border-radius: 3px;
 }
 .pc-template-watercolor {
-  opacity: 0.72;
-  cursor: default;
+  cursor: pointer;
 }
 .pc-template-watercolor .pc-template-thumb {
   background: #eee8d8;
@@ -282,6 +281,38 @@
 .pc-maker :is(button, textarea, select):focus-visible {
   outline: 2px solid #77785b;
   outline-offset: 3px;
+}
+.pc-ai-panel {
+  margin: 0 0 22px;
+  padding: 14px;
+  border: 1px solid #ded7ca;
+  border-radius: 12px;
+  background: #f5f2e8;
+}
+.pc-ai-panel p,
+.pc-ai-panel small {
+  display: block;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.pc-ai-panel small {
+  margin-top: 10px;
+  color: #71685e;
+}
+.pc-ai-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+.pc-ai-consent input {
+  margin-top: 4px;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  accent-color: #77785b;
 }
 @media (max-width: 1000px) {
   .pc-maker {

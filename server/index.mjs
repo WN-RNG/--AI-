@@ -13,6 +13,8 @@ import { mountCoverAssets } from './coverAssets.mjs';
 
 // 根据此文件的位置定位项目，移动目录后无需写死新的盘符。
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Node 24 loads local secrets without a dependency; Render environment variables take precedence.
+if (existsSync(path.join(root, '.env'))) process.loadEnvFile(path.join(root, '.env'));
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, 'data'));
 const allowedOrigins = process.argv.includes('--dev')
   ? ['http://127.0.0.1:5173', 'http://localhost:5173']

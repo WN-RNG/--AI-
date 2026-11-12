@@ -1,7 +1,7 @@
 /** Browser-local postcard rendering. Only four sampled base colours are used for the backdrop. */
 export type RGB = [number, number, number];
 export type PaletteColor = { rgb: RGB; weight: number };
-export type PostcardTemplate = 'frost';
+export type PostcardTemplate = 'frost' | 'watercolor';
 export type PostcardOrientation = 'auto' | 'landscape' | 'portrait';
 export type PostcardLayout = {
   width: number;
@@ -167,6 +167,7 @@ export type PostcardRenderOptions = {
   longEdge: number;
   palette: PaletteColor[];
   caption: string;
+  background?: CanvasImageSource;
 };
 
 /** Only the low-resolution backdrop is blurred; the contained photo is drawn afterwards, sharply. */
@@ -221,6 +222,27 @@ export function renderPostcard(
   context.restore();
   background.element.width = background.element.height = 1;
 
+  if (options.template === 'watercolor') {
+    context.fillStyle = '#f5eedf';
+    context.fillRect(0, 0, width, height);
+  } else if (options.background) {
+    context.save();
+    context.filter = `blur(${4 * unit}px)`;
+    context.drawImage(
+      options.background,
+      -width * 0.01,
+      -height * 0.01,
+      width * 1.02,
+      height * 1.02,
+    );
+    context.restore();
+    const shade = context.createLinearGradient(0, height * 0.65, 0, height);
+    shade.addColorStop(0, 'rgba(0,0,0,0)');
+    shade.addColorStop(1, 'rgba(0,0,0,0.42)');
+    context.fillStyle = shade;
+    context.fillRect(0, 0, width, height);
+  }
+
   context.save();
   context.shadowColor = dark ? '#00000055' : '#342d2638';
   context.shadowBlur = 32 * unit;
@@ -244,7 +266,12 @@ export function renderPostcard(
 
   const textWidth = layout.caption.width * 0.94;
   let fontSize = 49 * unit;
-  context.fillStyle = dark ? '#fffaf0' : '#2f3836';
+  context.fillStyle =
+    options.template === 'watercolor'
+      ? '#4a504c'
+      : options.background || dark
+        ? '#fffaf0'
+        : '#2f3836';
   context.font = `400 ${fontSize}px "Album Blessing", cursive`;
   const lines = captionLines(context, options.caption, textWidth);
   const lineHeight = fontSize * 1.02;

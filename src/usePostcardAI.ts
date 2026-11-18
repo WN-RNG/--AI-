@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
+import { englishServiceError } from './uiTranslations';
 import type { PostcardTemplate } from './postcard';
 
 export type AIJob = {
@@ -52,12 +53,19 @@ export function usePostcardAI(photoId: string, userId?: string) {
           });
           if (controller.signal.aborted || contextRef.current !== context) return;
           if (ids.current[style] !== job.id) continue;
-          setJobs((previous) => ({ ...previous, [style]: job }));
+          setJobs((previous) => ({
+            ...previous,
+            [style]: { ...job, error: job.error ? englishServiceError(job.error) : '' },
+          }));
           active ||= job.status === 'queued' || job.status === 'running';
         } catch (reason) {
           if (controller.signal.aborted) return;
           if (ids.current[style] !== id) continue;
-          setError(reason instanceof Error ? reason.message : '无法查询生成任务');
+          setError(
+            reason instanceof Error
+              ? englishServiceError(reason.message)
+              : 'The generation status could not be retrieved.',
+          );
           try {
             localStorage.removeItem(`postcard-job:${context}:${style}`);
           } catch {}
@@ -87,7 +95,10 @@ export function usePostcardAI(photoId: string, userId?: string) {
         { method: 'POST', body: JSON.stringify({ style, consent: true }) },
       );
       if (contextRef.current !== expected) return;
-      setJobs((previous) => ({ ...previous, [style]: job }));
+      setJobs((previous) => ({
+        ...previous,
+        [style]: { ...job, error: job.error ? englishServiceError(job.error) : '' },
+      }));
       ids.current[style] = job.id;
       try {
         localStorage.setItem(`postcard-job:${context}:${style}`, job.id);
@@ -95,7 +106,11 @@ export function usePostcardAI(photoId: string, userId?: string) {
       wake.current();
     } catch (reason) {
       if (contextRef.current === expected)
-        setError(reason instanceof Error ? reason.message : '提交生成失败');
+        setError(
+          reason instanceof Error
+            ? englishServiceError(reason.message)
+            : 'The generation request could not be submitted.',
+        );
     } finally {
       sending.current = false;
       if (contextRef.current === expected) setBusy(false);

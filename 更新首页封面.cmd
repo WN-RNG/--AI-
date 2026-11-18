@@ -1,26 +1,25 @@
 @echo off
-setlocal
 chcp 65001 >nul
-pushd "%~dp0"
-if errorlevel 1 exit /b 1
-
-echo Preparing the project's Python environment...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\setup-python.ps1"
+setlocal EnableExtensions DisableDelayedExpansion
+cd /d "%~dp0"
 if errorlevel 1 goto failed
-
-echo Collecting landscape display photos from 500px...
-"%~dp0.venv\Scripts\python.exe" -X utf8 -B "%~dp0scripts\sync-500px-covers.py" %*
+where node >nul 2>nul
+if errorlevel 1 (
+  echo Node.js 24 or newer is required. Run the album launcher first.
+  goto failed
+)
+node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 24 ? 0 : 1)"
 if errorlevel 1 goto failed
-
+echo Updating homepage covers from the cover-materials folder...
+node "%~dp0scripts\update-covers.mjs"
+if errorlevel 1 goto failed
 echo.
-echo Covers updated. Refresh the album homepage to see them.
-popd
+echo Done. Refresh the local homepage to see the new selection.
+echo For the online site, commit the public/covers output and redeploy.
 pause
 exit /b 0
-
 :failed
 echo.
-echo Update failed. Your previous homepage cover list has been kept.
-popd
+echo Update failed. The previous cover selection was retained. Check the error above.
 pause
 exit /b 1

@@ -35,7 +35,7 @@ function fail(state, id) {
 test('a downloaded manifest keeps loaded bundled covers ready so autoplay can reach new photographs', () => {
   const fallback = parseCoverManifest(manifest([slide('B'), slide('A'), slide('C')]));
   const loaded = ready(ready(initialCoverState(fallback), 'B'), 'A');
-  const imported = parseCoverManifest(manifest([...fallback, slide('500px-new')]));
+  const imported = parseCoverManifest(manifest([...fallback, slide('manual-new')]));
   const merged = reduceCoverState(loaded, { type: 'replace', slides: imported });
   assert.equal(reduceCoverState(merged, { type: 'advance' }).activeId, 'A');
   const changed = reduceCoverState(loaded, {

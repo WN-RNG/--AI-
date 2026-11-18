@@ -272,21 +272,21 @@ export function renderPostcard(
       : options.background || dark
         ? '#fffaf0'
         : '#2f3836';
-  context.font = `400 ${fontSize}px "Album Blessing", cursive`;
+  context.font = `400 ${fontSize}px "Album Caslon", "Microsoft YaHei", serif`;
   const lines = captionLines(context, options.caption, textWidth);
   const lineHeight = fontSize * 1.02;
   const widest = Math.max(1, ...lines.map((line) => context.measureText(line).width));
   // Long edited blessings still fit without clipping or dropping the last words.
   if (widest > textWidth) {
     fontSize *= textWidth / widest;
-    context.font = `400 ${fontSize}px "Album Blessing", cursive`;
+    context.font = `400 ${fontSize}px "Album Caslon", "Microsoft YaHei", serif`;
   }
-  context.textAlign = 'center';
+  context.textAlign = 'left';
   context.textBaseline = 'middle';
   const startY =
     layout.caption.y + layout.caption.height / 2 - ((lines.length - 1) * lineHeight) / 2;
   lines.forEach((line, index) =>
-    context.fillText(line, width / 2, startY + index * lineHeight, textWidth),
+    context.fillText(line, layout.caption.x, startY + index * lineHeight, textWidth),
   );
   return layout;
 }

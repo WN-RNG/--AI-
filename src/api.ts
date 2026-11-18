@@ -3,6 +3,7 @@
  * 逐文件说明见项目根目录《项目结构与代码说明.md》。
  */
 
+import { englishServiceError } from './uiTranslations.ts';
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (options.method && options.method !== 'GET') headers.set('X-Album-Client', '1');
@@ -16,11 +17,16 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     // A cancelled response body must remain cancelled, never become successful empty data.
     if (options.signal?.aborted) throw options.signal.reason ?? error;
     if (error instanceof Error && error.name === 'AbortError') throw error;
-    throw new Error(`服务响应格式异常（${response.status}），请稍后重试`);
+    throw new Error(`Unexpected response format (${response.status}). Please try again.`);
   }
   if (!data || typeof data !== 'object' || Array.isArray(data))
-    throw new Error('服务响应数据异常，请稍后重试');
-  if (!response.ok) throw new Error(data.error || `请求失败（${response.status}）`);
+    throw new Error('Unexpected response data. Please try again.');
+  if (!response.ok)
+    throw new Error(
+      englishServiceError(
+        typeof data.error === 'string' ? data.error : `Request failed (${response.status}).`,
+      ),
+    );
   return data as T;
 }
 export function formatBytes(bytes: number) {

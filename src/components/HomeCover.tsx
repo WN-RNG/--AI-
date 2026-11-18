@@ -1,15 +1,12 @@
 import { useEffect, useReducer, useState } from 'react';
 import { Aperture, ArrowDownRight, Pause, Play } from 'lucide-react';
 import { useI18n } from '../i18n';
-import fallback from '../../public/covers/fallback-manifest.json';
+import initialManifest from '../../public/covers/manifest.json';
 import { coverFrame, initialCoverState, parseCoverManifest, reduceCoverState } from '../homeCover';
 import type { User } from '../../shared/types';
 
-// Bundled artwork's provenance is prose in the original asset manifest, not an outbound link.
-const fallbackSlides = parseCoverManifest({
-  ...fallback,
-  slides: fallback.slides.map((slide) => ({ ...slide, source: '' })),
-});
+// The manually selected pool is also bundled for an unavailable runtime manifest.
+const fallbackSlides = parseCoverManifest(initialManifest);
 
 /** Homepage imagery is separate from user albums and never enters download/postcard flows. */
 export default function HomeCover({
@@ -27,7 +24,7 @@ export default function HomeCover({
   onLogin: (register: boolean) => void;
   suspended?: boolean;
 }) {
-  const { language, setLanguage } = useI18n();
+  const { language } = useI18n();
   const zh = language === 'zh';
   const [state, dispatch] = useReducer(reduceCoverState, fallbackSlides, initialCoverState);
   const [paused, setPaused] = useState(false);
@@ -47,7 +44,7 @@ export default function HomeCover({
         if (slides.length) dispatch({ type: 'replace', slides });
       })
       .catch(() => {
-        /* Missing/invalid optional manifests retain the bundled original artwork. */
+        /* Keep the bundled manual selection if the optional runtime manifest is unavailable. */
       });
     const visibility = () => setHidden(document.hidden);
     const motion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -95,17 +92,8 @@ export default function HomeCover({
       <header className="home-cover-header">
         <a className="home-brand" href="/" aria-label={zh ? '光影首页' : 'Light & Frame home'}>
           <Aperture size={38} />
-          <span>光影</span>
+          <span>Light &amp; Frame</span>
         </a>
-        <button
-          className="home-language"
-          onClick={() => setLanguage(zh ? 'en' : 'zh')}
-          aria-label={zh ? 'Switch to English' : '切换中文'}
-        >
-          <span className={!zh ? 'active' : ''}>EN</span>
-          <span aria-hidden="true">/</span>
-          <span className={zh ? 'active' : ''}>中</span>
-        </button>
         <div className="home-auth">
           {user ? (
             <button onClick={onLibrary}>
@@ -128,24 +116,13 @@ export default function HomeCover({
           <button onClick={onFavorites}>{zh ? '我的收藏' : 'Favorites'}</button>
         </nav>
       </header>
-      <div className="home-title" key={active?.id}>
-        <p>
-          {active?.subtitle || (zh ? '收藏每一道光，留住每一个瞬间。' : 'A place for every frame.')}
-        </p>
-        <h1>{active?.title || 'STILL MOMENTS'}</h1>
-      </div>
       <div className="home-cover-bottom">
-        <div className="home-credit">
-          <span>{active?.credit || (zh ? '原创风景示意图' : 'Original illustrative artwork')}</span>
-          {active?.source ? (
-            <a href={active.source} target="_blank" rel="noopener noreferrer">
-              {active.author || (zh ? '作品来源' : 'Photo source')} ↗
-            </a>
-          ) : active?.author ? (
-            <span>{active.author}</span>
-          ) : null}
-          <span>{zh ? '仅供首页展示' : 'For homepage display'}</span>
-        </div>
+        {(active?.credit || active?.author) && (
+          <div className="home-credit">
+            {active.credit && <span>{active.credit}</span>}
+            {active.author && <span>{active.author}</span>}
+          </div>
+        )}
         <div className="home-explore-actions">
           {usable.length > 1 && !reducedMotion && (
             <button

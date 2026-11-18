@@ -1,10 +1,13 @@
-/** Optimize one authorized cover image. Called by import-covers.py; never touches album data. */
+/** Optimize one manually selected cover image; never touches album data. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 
-export async function prepareCover(inputPath, outputPath) {
+export async function prepareCover(inputPath, outputPath, { rotation = 0 } = {}) {
+  if (![0, 90, 180, 270].includes(rotation)) {
+    throw new Error('Cover rotation must be 0, 90, 180 or 270 degrees clockwise.');
+  }
   if (path.resolve(inputPath) === path.resolve(outputPath)) {
     throw new Error('Input and output must be different files.');
   }
@@ -18,7 +21,8 @@ export async function prepareCover(inputPath, outputPath) {
     throw new Error('Only static JPG, PNG and WebP covers are supported.');
   }
   const { data, info: output } = await image
-    .rotate()
+    .autoOrient()
+    .rotate(rotation)
     .resize({ width: 2560, height: 1800, fit: 'inside', withoutEnlargement: true })
     .webp({ quality: 85, effort: 4 })
     .toBuffer({ resolveWithObject: true });

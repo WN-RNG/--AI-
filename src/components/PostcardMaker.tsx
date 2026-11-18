@@ -71,7 +71,8 @@ export default function PostcardMaker({
           redirect: 'error',
           signal: controller.signal,
         });
-        if (!response.ok) throw Error('AI 图片不可用或作者已撤回许可');
+        if (!response.ok)
+          throw Error('The AI image is unavailable or its permission has been withdrawn.');
         bitmap = await createImageBitmap(await response.blob());
         if (controller.signal.aborted) {
           bitmap.close();
@@ -80,7 +81,7 @@ export default function PostcardMaker({
         setArtwork({ id: job.id, image: bitmap });
       } catch (reason) {
         if (!controller.signal.aborted)
-          setError(reason instanceof Error ? reason.message : 'AI 图片加载失败');
+          setError(reason instanceof Error ? reason.message : 'The AI image could not be loaded.');
       }
     })();
     return () => {
@@ -188,7 +189,10 @@ export default function PostcardMaker({
                 redirect: 'error',
                 signal: controller.signal,
               }).then((response) => {
-                if (!response.ok) throw Error('AI 图片不可用或下载许可已撤回');
+                if (!response.ok)
+                  throw Error(
+                    'The AI image is unavailable or download permission has been withdrawn.',
+                  );
                 return response.blob();
               })
             : await authorizedPostcardBlob(photo.id, controller.signal);

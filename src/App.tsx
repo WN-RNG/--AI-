@@ -14,7 +14,6 @@ import {
   ChevronRight,
   Download,
   Expand,
-  FolderPlus,
   Globe,
   Grid2X2,
   Heart,
@@ -305,7 +304,7 @@ function CreateAlbum({
 }
 
 export default function App() {
-  const { t, language, setLanguage } = useI18n();
+  const { t, language } = useI18n();
   const { path, route, navigate } = useRoute();
   let publicSlug: string | null = null;
   if (path.startsWith('/p/')) {
@@ -339,6 +338,8 @@ export default function App() {
   const [resumeIntent, setResumeIntent] = useState<PendingIntent | null>(null);
   const [uploadGuide, setUploadGuide] = useState(false);
   const [tab, setTab] = useState<Tab>('projects');
+  const libraryView = !publicView && tab === 'projects';
+  const trashView = !publicView && tab === 'trash';
   const contextKey = `${publicSlug ? 'public' : user?.id || 'guest'}:${path}:${publicSlug || (tab === 'trash' ? 'trash' : albumId)}`;
   const album = loadedScope === contextKey ? albumData : null;
   const photos = loadedScope === contextKey ? photoData : emptyPhotos;
@@ -510,6 +511,8 @@ export default function App() {
     if (!publicView && !albumId && tab !== 'trash') {
       setAlbum(null);
       setPhotos([]);
+      // A cancelled guest feed must not leave a new user's empty workspace loading forever.
+      setLoading(false);
       return;
     }
     const controller = new AbortController();
@@ -1366,7 +1369,14 @@ export default function App() {
           onLogin={(register) => requestLogin('login', undefined, undefined, register)}
         />
       )}
-      <div className="studio-layout" id="collection" data-view={publicView ? 'public' : 'private'}>
+      <div
+        className="studio-layout"
+        id="collection"
+        data-view={publicView ? 'public' : 'private'}
+        data-section={
+          favoritesView ? 'favorites' : libraryView ? 'albums' : trashView ? 'trash' : undefined
+        }
+      >
         <aside className="studio-sidebar">
           <button
             className="brand"
@@ -1377,11 +1387,7 @@ export default function App() {
             aria-label={t('光影相册首页')}
           >
             <Aperture size={29} />
-            <span>
-              {t('光影')}
-              <span className="brand-separator">/</span>
-              <small>PHOTOGRAPHIC JOURNAL</small>
-            </span>
+            <span>{t('光影')}</span>
           </button>
           <p className="sidebar-label">LIBRARY</p>
           <nav className="main-nav" aria-label={t('主导航')}>
@@ -1422,22 +1428,41 @@ export default function App() {
           </nav>
           <div className="sidebar-bottom">
             <p>{language === 'zh' ? t('每一道光，都值得珍藏。') : 'For the way you see.'}</p>
-            <button
-              className="studio-language"
-              onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')}
-              aria-label={language === 'en' ? t('切换中文') : 'Switch to English'}
-            >
-              <span className={language === 'en' ? 'active' : ''}>EN</span>
-              <span>/</span>
-              <span className={language === 'zh' ? 'active' : ''}>{t('中')}</span>
-            </button>
           </div>
         </aside>
         <div className="studio-content">
-          <header className="studio-header">
-            <span className="studio-breadcrumb">
-              {language === 'zh' ? t('摄影 · 记录 · 分享') : 'PHOTOGRAPHY / YOUR OWN PERSPECTIVE'}
-            </span>
+          <header
+            className={`studio-header${feedView || libraryView || trashView ? ' collection-header' : ''}${trashView ? ' trash-header' : ''}`}
+          >
+            {feedView || libraryView || trashView ? (
+              <section
+                className={`collection-heading${trashView ? ' trash-heading' : ''}`}
+                aria-labelledby="collection-title"
+              >
+                <h1 id="collection-title">
+                  {favoritesView
+                    ? 'Frames worth keeping.'
+                    : libraryView
+                      ? 'My albums.'
+                      : trashView
+                        ? t('回收站')
+                        : 'The public collection.'}
+                </h1>
+                <p>
+                  {favoritesView
+                    ? 'A little collection of everything that moves you.'
+                    : libraryView
+                      ? 'A personal space for every photograph.'
+                      : trashView
+                        ? t('被移除的照片暂存在这里，恢复后会回到原来的项目。')
+                        : 'Extraordinary moments. A thousand ways of seeing.'}
+                </p>
+              </section>
+            ) : (
+              <span className="studio-breadcrumb">
+                {language === 'zh' ? t('摄影 · 记录 · 分享') : 'PHOTOGRAPHY / YOUR OWN PERSPECTIVE'}
+              </span>
+            )}
             <div className="header-actions">
               {user ? (
                 <>
@@ -1495,6 +1520,7 @@ export default function App() {
                 </>
               )}
             </div>
+            {trashView && <div className="trash-divider" aria-hidden="true" />}
           </header>
           <input
             ref={fileInput}
@@ -1508,32 +1534,7 @@ export default function App() {
             }}
           />
           {feedView ? (
-            <main className="explore-page public-gallery">
-              <section className="collection-heading">
-                <p className="eyebrow">
-                  {favoritesView
-                    ? 'YOUR PERSONAL INSPIRATION'
-                    : 'A WORLD SEEN THROUGH DIFFERENT EYES'}
-                </p>
-                <h1>
-                  {language === 'zh'
-                    ? favoritesView
-                      ? t('我的珍藏')
-                      : t('公共图库')
-                    : favoritesView
-                      ? 'Frames worth keeping.'
-                      : 'The public collection.'}
-                </h1>
-                <p>
-                  {language === 'zh'
-                    ? favoritesView
-                      ? t('收藏触动你的作品，让灵感随时回来。')
-                      : t('发现优秀作品，从一个瞬间开启新的故事。')
-                    : favoritesView
-                      ? 'A little collection of everything that moves you.'
-                      : 'Extraordinary moments. A thousand ways of seeing.'}
-                </p>
-              </section>
+            <main className="explore-page public-gallery" aria-labelledby="collection-title">
               <div className="gallery-toolbar">
                 <div className="gallery-tabs" role="group" aria-label={t('图库内容')}>
                   {favoritesView ? (
@@ -1614,6 +1615,7 @@ export default function App() {
                 </div>
               ) : !loadError && !loading ? (
                 <Empty
+                  className={favoritesView ? 'collection-empty' : undefined}
                   icon={favoritesView ? Heart : Globe}
                   title={
                     search
@@ -1682,24 +1684,27 @@ export default function App() {
                 </div>
               )}
               {!publicView && tab !== 'trash' && (
-                <div className="album-rail">
+                <div className={`album-rail${libraryView ? ' library-toolbar' : ''}`}>
                   <span className="rail-label">
+                    {libraryView && <Images size={18} aria-hidden="true" />}
                     {t('我的拍摄项目')}
                     <span>{albums.length.toString().padStart(2, '0')}</span>
                   </span>
-                  <div className="album-tabs">
-                    {albums.map((a) => (
-                      <button
-                        key={a.id}
-                        className={albumId === a.id ? 'active' : ''}
-                        onClick={() => setAlbumId(a.id)}
-                      >
-                        {a.coverUrl && <img src={a.coverUrl} alt="" />}
-                        <span>{a.title}</span>
-                        {a.isPublic ? <Globe size={12} /> : <LockKeyhole size={12} />}
-                      </button>
-                    ))}
-                  </div>
+                  {albums.length > 0 && (
+                    <div className="album-tabs">
+                      {albums.map((a) => (
+                        <button
+                          key={a.id}
+                          className={albumId === a.id ? 'active' : ''}
+                          onClick={() => setAlbumId(a.id)}
+                        >
+                          {a.coverUrl && <img src={a.coverUrl} alt="" />}
+                          <span>{a.title}</span>
+                          {a.isPublic ? <Globe size={12} /> : <LockKeyhole size={12} />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <button className="rail-create" onClick={() => setCreateOpen(true)}>
                     <Plus size={15} />
                     <span>{t('新建项目')}</span>
@@ -2067,12 +2072,7 @@ export default function App() {
                   </main>
                 </>
               ) : tab === 'trash' && !publicView ? (
-                <main className="trash-page">
-                  <div className="section-intro">
-                    <p className="eyebrow">NOT EVERY GOODBYE IS FOREVER</p>
-                    <h1>{t('回收站')}</h1>
-                    <p className="muted">{t('被移除的照片暂存在这里，恢复后会回到原来的项目。')}</p>
-                  </div>
+                <main className="trash-page" aria-labelledby="collection-title">
                   {loading ? (
                     <Loading />
                   ) : photos.length ? (
@@ -2122,38 +2122,30 @@ export default function App() {
                   </button>
                 </Empty>
               ) : !loading && !loadError && !publicView ? (
-                <main className="welcome-page">
-                  <div className="welcome-decoration">
-                    <Aperture size={65} strokeWidth={1} />
-                  </div>
-                  <p className="eyebrow">YOUR NEXT STORY STARTS HERE</p>
-                  <h1>
-                    {t('为你的作品，')}
-                    <br />
-                    {t('留一个更好的空间。')}
-                  </h1>
-                  <p className="muted">
-                    {t('创建第一个拍摄项目，上传照片，')}
-                    <br />
-                    {t('从相似的瞬间里，找到最动人的一帧。')}
-                  </p>
-                  <div className="welcome-actions">
-                    <button className="button button-primary" onClick={() => setCreateOpen(true)}>
-                      <FolderPlus size={18} />
-                      {t('新建拍摄项目')}
-                    </button>
-                    <button
-                      className="button button-secondary"
-                      disabled={working}
-                      onClick={() => void importDemo()}
-                    >
-                      {working ? <LoaderCircle className="spin" size={17} /> : <Images size={17} />}
-                      {t('体验示例项目')}
-                    </button>
-                  </div>
-                  <span className="small-text muted">
-                    {t('示例项目使用生成的摄影素材，可在自己的空间内自由体验。')}
-                  </span>
+                <main
+                  className="library-empty-page"
+                  aria-labelledby={libraryView ? 'collection-title' : undefined}
+                >
+                  <Empty
+                    className="collection-empty"
+                    icon={Images}
+                    title="A home for your photographs"
+                    text="Create your first album to start collecting your moments."
+                  >
+                    <div className="library-empty-actions">
+                      <button className="button button-primary" onClick={() => setCreateOpen(true)}>
+                        {t('新建拍摄项目')}
+                      </button>
+                      <button
+                        className="button button-secondary"
+                        disabled={working}
+                        onClick={() => void importDemo()}
+                      >
+                        {working && <LoaderCircle className="spin" size={17} />}
+                        {t('体验示例项目')}
+                      </button>
+                    </div>
+                  </Empty>
                 </main>
               ) : null}
             </>
@@ -2161,10 +2153,10 @@ export default function App() {
           <footer className="app-footer">
             <span>{t('光影 / AI 相册')}</span>
             <span>MADE FOR THE WAY YOU SEE.</span>
-            {publicView && (
+            {(publicView || libraryView || trashView) && (
               <button className="text-button" onClick={() => navigate('/explore')}>
                 <ArrowLeft size={13} />
-                {t('所有公开作品')}
+                <span>{t('所有公开作品')}</span>
               </button>
             )}
           </footer>
@@ -2418,11 +2410,13 @@ function Loading() {
   );
 }
 function Empty({
+  className,
   icon: Icon,
   title,
   text,
   children,
 }: {
+  className?: string;
   icon: typeof Search;
   title: string;
   text: string;
@@ -2430,7 +2424,7 @@ function Empty({
 }) {
   const { t } = useI18n();
   return (
-    <div className="empty-state">
+    <div className={`empty-state${className ? ` ${className}` : ''}`}>
       <Icon size={32} strokeWidth={1.3} />
       <h3>{title}</h3>
       <p>{text}</p>

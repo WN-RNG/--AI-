@@ -119,7 +119,8 @@ test('frost artwork draws the complete sharp photograph and only the authored bl
       caption: blessing,
     });
     assert.equal(written.join(' '), blessing);
-    assert.match(context.font, /Album Blessing/);
+    assert.match(context.font, /Album Caslon/);
+    assert.equal(context.textAlign, 'left');
     const photoDraw = draws.find(({ args }) => args[0] === image);
     assert.equal(photoDraw.filter, 'none');
     assert.equal(

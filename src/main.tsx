@@ -11,6 +11,7 @@ import './fonts.css';
 import './styles.css';
 import './editorial.css';
 import './mobile.css';
+import './typography.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

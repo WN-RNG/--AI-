@@ -56,19 +56,20 @@ if (existsSync(path.join(dist, 'index.html'))) {
         .type('html')
         .send(
           render(req, {
-            title: '作品集暂不可用 · 光影',
-            description: '该作品集尚未发布或已经撤回。',
-            content: '<main><h1>作品集暂不可用</h1><a href="/explore">浏览公开作品</a></main>',
+            title: 'Collection unavailable · Light & Frame',
+            description: 'This collection is private or is no longer published.',
+            content:
+              '<main><h1>Collection unavailable</h1><a href="/explore">Browse public photographs</a></main>',
             noindex: true,
           }),
         );
     const { album, photos } = result;
-    const content = `<main><nav><a href="/explore">光影 · 公开作品</a></nav><h1>${escape(album.title)}</h1><p>${photos.length} 张公开作品</p><div>${photos.map((photo) => `<figure><a href="${photo.previewUrl}"><img src="${photo.thumbnailUrl}" alt="${escape(photo.filename)}" width="${photo.width}" height="${photo.height}" loading="lazy"></a><figcaption>${escape(photo.filename)} · ${escape(photo.authorName)}</figcaption></figure>`).join('')}</div></main>`;
+    const content = `<main><nav><a href="/explore">Light &amp; Frame · Public collection</a></nav><h1>${escape(album.title)}</h1><p>${photos.length} public photographs</p><div>${photos.map((photo) => `<figure><a href="${photo.previewUrl}"><img src="${photo.thumbnailUrl}" alt="${escape(photo.filename)}" width="${photo.width}" height="${photo.height}" loading="lazy"></a><figcaption>${escape(photo.filename)} · ${escape(photo.authorName)}</figcaption></figure>`).join('')}</div></main>`;
     res.setHeader('Cache-Control', 'no-store');
     res.type('html').send(
       render(req, {
-        title: `${album.title} · 光影作品集`,
-        description: `${album.title}，共 ${photos.length} 张公开摄影作品。`,
+        title: `${album.title} · Light & Frame`,
+        description: `${album.title}. ${photos.length} public photographs.`,
         content,
         image: album.coverUrl,
       }),
@@ -89,20 +90,20 @@ if (existsSync(path.join(dist, 'index.html'))) {
         .type('html')
         .send(
           render(req, {
-            title: '图库暂不可用 · 光影',
-            description: '请稍后重试或重新打开图库。',
-            content: '<main><h1>图库暂不可用</h1><a href="/">重新打开图库</a></main>',
+            title: 'Gallery unavailable · Light & Frame',
+            description: 'Please try again or reopen the gallery.',
+            content: '<main><h1>Gallery unavailable</h1><a href="/">Reopen gallery</a></main>',
             noindex: true,
           }),
         );
     }
     const { photos } = result;
-    const content = `<main><a href="/">光影</a><h1>发现摄影作品</h1><p>浏览作者主动发布的照片，发现值得珍藏的光影。</p>${photos.map((photo) => `<figure><a href="/p/${escape(photo.albumSlug)}"><img src="${photo.thumbnailUrl}" alt="${escape(photo.filename)}" width="${photo.width}" height="${photo.height}" loading="lazy"></a><figcaption>${escape(photo.albumTitle)} · ${escape(photo.authorName)}</figcaption></figure>`).join('')}${photos.length ? '' : '<p>当前暂无符合条件的公开作品。</p>'}</main>`;
+    const content = `<main><a href="/">Light &amp; Frame</a><h1>Discover photographs</h1><p>Explore photographs their creators have chosen to share.</p>${photos.map((photo) => `<figure><a href="/p/${escape(photo.albumSlug)}"><img src="${photo.thumbnailUrl}" alt="${escape(photo.filename)}" width="${photo.width}" height="${photo.height}" loading="lazy"></a><figcaption>${escape(photo.albumTitle)} · ${escape(photo.authorName)}</figcaption></figure>`).join('')}${photos.length ? '' : '<p>No public photographs match this collection yet.</p>'}</main>`;
     res.setHeader('Cache-Control', 'no-store');
     res.type('html').send(
       render(req, {
-        title: '发现摄影作品 · 光影',
-        description: '发现作者主动发布的摄影作品。',
+        title: 'Discover photographs · Light & Frame',
+        description: 'Discover photographs shared by their creators.',
         content,
         image: photos[0]?.previewUrl,
       }),

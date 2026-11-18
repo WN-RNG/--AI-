@@ -3,6 +3,35 @@ export type TranslationValues = Record<string, string | number>;
 
 /** Exact keys only: unknown content is retained verbatim, including user-authored text. */
 const english: Record<string, string> = {
+  光影: 'Light & Frame',
+  '光影 · Original artwork': 'Light & Frame · Original artwork',
+  'AI 图片不可用或作者已撤回许可':
+    'The AI image is unavailable or its permission has been withdrawn.',
+  'AI 图片加载失败': 'The AI image could not be loaded.',
+  'AI 图片不可用或下载许可已撤回':
+    'The AI image is unavailable or download permission has been withdrawn.',
+  无法查询生成任务: 'The generation status could not be retrieved.',
+  提交生成失败: 'The generation request could not be submitted.',
+  '尚未配置 Qwen API 密钥，请管理员配置 DASHSCOPE_API_KEY':
+    'Qwen is not configured. Ask the administrator to set DASHSCOPE_API_KEY.',
+  作者未开放照片的制作与下载许可:
+    'The author has not allowed creation or downloads for this photograph.',
+  生成任务不存在: 'The generation task is unavailable.',
+  请选择有效的明信片样式: 'Choose a valid postcard style.',
+  请先同意将照片处理副本发送至千问图像服务: 'Please consent to sending a photo copy to Qwen.',
+  '已有生成任务进行中，请等待完成后再试':
+    'A generation is already in progress. Please wait for it to finish.',
+  '本月 AI 生成额度已用完，仍可使用本地磨砂明信片':
+    'The monthly AI allowance has been reached. Local frost postcards are still available.',
+  图片尚未生成完成: 'The image is still being generated.',
+  'API 密钥或模型权限不可用，请管理员检查配置。':
+    'The API key or model permission is unavailable. Ask the administrator to check the configuration.',
+  '生成等待已超时，可能已产生调用费用。请联系管理员核对，系统不会自动重复提交。':
+    'Generation timed out and may have been billed. Contact the administrator to check; it will not be submitted again automatically.',
+  '图像生成未完成，请联系管理员核对。系统不会自动重复提交。':
+    'Generation did not finish. Contact the administrator to check; it will not be submitted again automatically.',
+  '服务已重启，生成结果未确认。为避免重复计费，请联系管理员核对。':
+    'The server restarted before the result was confirmed. Contact the administrator to check before submitting again.',
   '{value0} 暂时无法加载': '{value0} is unavailable',
   '本次上传未完成：{value0}': 'This upload could not be completed: {value0}',
   '已上传 {value0} 张照片，正在后台分析':
@@ -206,7 +235,7 @@ const english: Record<string, string> = {
   体验示例项目: 'Try a demo album',
   '示例项目使用生成的摄影素材，可在自己的空间内自由体验。':
     'The demo uses generated photography, ready to explore in your own workspace.',
-  '光影 / AI 相册': '光影 / Photo studio',
+  '光影 / AI 相册': 'Light & Frame / Photo studio',
   所有公开作品: 'All public works',
   正在上传照片: 'Uploading photographs',
   '请保持页面打开 · 共': 'Keep this page open ·',
@@ -227,7 +256,7 @@ const english: Record<string, string> = {
     'photographs will be removed from the album and public collection. You can restore them from trash.',
   '正在加载照片，首次连接可能需要稍候……':
     'Loading photographs. The first connection may take a moment…',
-  登录光影: 'Welcome to 光影',
+  登录光影: 'Welcome to Light & Frame',
   登录: 'Log in',
   注册并登录: 'Sign up and continue',
   '登录后，继续整理和分享你的摄影作品。': 'Log in to organize and share your photography.',
@@ -282,14 +311,14 @@ const english: Record<string, string> = {
   '在光影之间，找到属于你的表达。': 'Find your expression between light and shadow.',
   探索公开作品: 'Explore the public gallery',
   开启你的创作空间: 'Create your workspace',
-  欢迎回到光影: 'Welcome back to 光影',
+  欢迎回到光影: 'Welcome back to Light & Frame',
   '使用邀请码，创建你的私密摄影空间。':
     'Use your invitation to create a private space for your photographs.',
   '你的照片、灵感与作品，在这里相遇。':
     'Your photographs, inspiration and work, together in one place.',
   '照片默认私密，由你决定哪些作品公开。':
     'Photographs are private by default. You decide what to publish.',
-  '光影 / 为摄影创作者而设计': '光影 / Made for photographers',
+  '光影 / 为摄影创作者而设计': 'Light & Frame / Made for photographers',
   关闭: 'Close',
   '请填写 1–120 个字符的作品集名称。': 'Enter a collection title between 1 and 120 characters.',
   '请至少选择一张照片。若要停止公开，请使用“撤回全部公开”。':
@@ -529,6 +558,9 @@ export function translateUi(
 // Only known service-error envelopes are formatted; no filenames or photo captions are inspected.
 function translateStatusError(language: Language, source: string): string {
   if (language !== 'en') return source;
+  const imageStatus = /^图像服务响应异常（(\d{3})），请稍后查询任务状态。$/.exec(source);
+  if (imageStatus)
+    return `The image service returned ${imageStatus[1]}. Please check the task again later.`;
   let match = /^服务响应格式异常（(\d{3})），请稍后重试$/.exec(source);
   if (match) return `Unexpected response format (${match[1]}). Please try again.`;
   match = /^请求失败（(\d{3})）$/.exec(source);
@@ -539,6 +571,13 @@ function translateStatusError(language: Language, source: string): string {
 }
 
 /** Translate a known upload error suffix without interpreting or rewriting its filename prefix. */
+export function englishServiceError(message: string): string {
+  const result = translateUi('en', message);
+  return /[\u3400-\u9fff]/.test(result)
+    ? 'The request could not be completed. Please try again.'
+    : result;
+}
+
 export function translateUploadIssue(language: Language, issue: string): string {
   const knownReasons = [
     '仅支持 JPG、PNG 或 WebP 图片，已跳过',
@@ -561,6 +600,9 @@ export function translateUploadIssue(language: Language, issue: string): string 
         return `${issue.slice(0, -suffix.length)}: ${translateUi(language, reason)}`;
       }
     }
+    const separator = issue.lastIndexOf('：');
+    if (separator >= 0)
+      return `${issue.slice(0, separator)}: ${englishServiceError(issue.slice(separator + 1))}`;
   }
   return translateUi(language, issue);
 }

@@ -1,0 +1,9 @@
+{
+  "images": {
+    "01-mountain-road.png": { "rotation": 270 },
+    "02-snow-mountain.png": { "rotation": 270 },
+    "03-lake-dawn.png": { "rotation": 90 },
+    "04-alpine-town.png": { "rotation": 90 },
+    "05-village-evening.png": { "rotation": 270 }
+  }
+}

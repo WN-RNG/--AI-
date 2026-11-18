@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { translateUi, translateUploadIssue } from '../src/uiTranslations.ts';
+import { translateUi, translateUploadIssue, englishServiceError } from '../src/uiTranslations.ts';
 
 test('UI translation keeps authored and unknown content verbatim', () => {
   for (const value of [
@@ -41,7 +41,23 @@ test('upload error formatter preserves the full filename, including punctuation 
     `${name}: Only JPG, PNG or WebP photographs are supported. Skipped.`,
   );
   assert.equal(translateUploadIssue('zh', issue), issue);
-  assert.equal(translateUploadIssue('en', `${name}：未知错误`), `${name}：未知错误`);
+  assert.equal(
+    translateUploadIssue('en', `${name}：未知错误`),
+    `${name}: The request could not be completed. Please try again.`,
+  );
+});
+
+test('English interface errors cover AI states while keeping authored data separate', () => {
+  assert.equal(englishServiceError('图片尚未生成完成'), 'The image is still being generated.');
+  assert.equal(
+    englishServiceError('图像服务响应异常（503），请稍后查询任务状态。'),
+    'The image service returned 503. Please check the task again later.',
+  );
+  assert.equal(
+    englishServiceError('未知服务错误'),
+    'The request could not be completed. Please try again.',
+  );
+  assert.equal(translateUi('en', '中文相册名字'), '中文相册名字');
 });
 
 test('known service error status remains visible in translated feedback', () => {

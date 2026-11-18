@@ -57,14 +57,14 @@ test('invalid JSON and invalid success shapes cannot reach the album state as em
       },
     }),
     async () => {
-      await assert.rejects(api('/albums'), /响应格式异常/);
+      await assert.rejects(api('/albums'), /Unexpected response format/);
     },
   );
   for (const body of [null, [], 'unexpected']) {
     await withFetch(
       async () => ({ ok: true, status: 200, json: async () => body }),
       async () => {
-        await assert.rejects(api('/albums'), /响应数据异常/);
+        await assert.rejects(api('/albums'), /Unexpected response data/);
       },
     );
   }
@@ -88,7 +88,7 @@ test('valid data and server errors retain the existing same-origin request contr
   await withFetch(
     async () => ({ ok: false, status: 403, json: async () => ({ error: '邀请码不正确' }) }),
     async () => {
-      await assert.rejects(api('/auth/register'), /邀请码不正确/);
+      await assert.rejects(api('/auth/register'), /invitation code/i);
     },
   );
 });

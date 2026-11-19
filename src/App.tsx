@@ -9,13 +9,11 @@ import {
   ArrowLeft,
   ArrowUpRight,
   Check,
-  CheckCheck,
   ChevronLeft,
   ChevronRight,
   Download,
   Expand,
   Globe,
-  Grid2X2,
   Heart,
   ImagePlus,
   Images,
@@ -38,6 +36,7 @@ import {
 } from 'lucide-react';
 import type { Album, Photo, PhotoPatch, PublicPhoto, User } from '../shared/types';
 import { api, formatDate } from './api';
+import { rememberAuthentication, shouldStartWithRegistration } from './authPreference';
 import AuthDialog from './components/AuthDialog';
 import HomeCover from './components/HomeCover';
 import MobileNavigation from './components/MobileNavigation';
@@ -110,7 +109,6 @@ function useRoute() {
 function PhotoCard({
   photo,
   selected,
-  selecting,
   readOnly,
   onOpen,
   onSelect,
@@ -119,7 +117,6 @@ function PhotoCard({
 }: {
   photo: Photo;
   selected: boolean;
-  selecting: boolean;
   readOnly: boolean;
   onOpen: () => void;
   onSelect: () => void;
@@ -138,8 +135,8 @@ function PhotoCard({
       <button
         className={`photo-image-button ${imageFailed ? 'is-image-error' : ''}`}
         style={imageFailed ? { aspectRatio: `${imageWidth} / ${imageHeight}` } : undefined}
-        onClick={selecting ? onSelect : onOpen}
-        aria-label={`${selecting ? t('选择') : t('预览')} ${photo.filename}`}
+        onClick={onOpen}
+        aria-label={`${t('预览')} ${photo.filename}`}
       >
         {imageFailed ? (
           <span
@@ -164,7 +161,7 @@ function PhotoCard({
       </button>
       {!readOnly && (
         <button
-          className={`photo-check ${selected ? 'is-selected' : ''} ${selecting ? 'is-visible' : ''}`}
+          className={`photo-check is-visible ${selected ? 'is-selected' : ''}`}
           onClick={onSelect}
           aria-label={`${selected ? t('取消选择') : t('选择')} ${photo.filename}`}
           aria-pressed={selected}
@@ -339,6 +336,8 @@ export default function App() {
   const [uploadGuide, setUploadGuide] = useState(false);
   const [tab, setTab] = useState<Tab>('projects');
   const libraryView = !publicView && tab === 'projects';
+  const selectionView = !publicView && tab === 'smart';
+  const workspaceView = libraryView || selectionView;
   const trashView = !publicView && tab === 'trash';
   const contextKey = `${publicSlug ? 'public' : user?.id || 'guest'}:${path}:${publicSlug || (tab === 'trash' ? 'trash' : albumId)}`;
   const album = loadedScope === contextKey ? albumData : null;
@@ -353,7 +352,6 @@ export default function App() {
   const bootstrapRef = useRef<{ userId: string; album: Album; photos: Photo[] } | null>(null);
   useEffect(() => setRenderLimit(48), [albumId, filter, search, sort, path]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [selecting, setSelecting] = useState(false);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [coverOpen, setCoverOpen] = useState(false);
@@ -375,6 +373,18 @@ export default function App() {
   const [uploadErrorsByAlbum, setUploadErrorsByAlbum] = useState<Record<string, string[]>>({});
   const [pendingUpload, setPendingUpload] = useState<UploadJob | null>(null);
   const [uploadLocked, setUploadLocked] = useState(false);
+  const [queuedDefaultUpload, setQueuedDefaultUpload] = useState<{
+    files: File[];
+    userId: string;
+    albumId: string;
+  } | null>(null);
+  const defaultUploadRequest = useRef<{
+    controller: AbortController;
+    userId: string;
+    path: string;
+    tab: Tab;
+    albumId: string;
+  } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
   const uploadJobRef = useRef<UploadJob | null>(null);
@@ -432,6 +442,18 @@ export default function App() {
     [reload, tell, t],
   );
   useEffect(() => {
+    const request = defaultUploadRequest.current;
+    if (
+      request &&
+      (request.userId !== user?.id ||
+        request.path !== path ||
+        request.tab !== tab ||
+        request.albumId !== albumId)
+    ) {
+      request.controller.abort();
+      defaultUploadRequest.current = null;
+      setUploadLocked(false);
+    }
     const job = uploadJobRef.current;
     if (
       job &&
@@ -449,6 +471,8 @@ export default function App() {
   useEffect(() => setUploadErrorsByAlbum({}), [user?.id]);
   useEffect(
     () => () => {
+      defaultUploadRequest.current?.controller.abort();
+      defaultUploadRequest.current = null;
       const job = uploadJobRef.current;
       if (job) {
         job.cancelled = true;
@@ -465,7 +489,10 @@ export default function App() {
     const epoch = authEpoch.current;
     api<{ user: User | null }>('/auth/session', { signal: controller.signal })
       .then((data) => {
-        if (!controller.signal.aborted && authEpoch.current === epoch) setUser(data.user);
+        if (!controller.signal.aborted && authEpoch.current === epoch) {
+          if (data.user) rememberAuthentication();
+          setUser(data.user);
+        }
       })
       .catch((error) => {
         if (
@@ -640,7 +667,6 @@ export default function App() {
   ]);
   useEffect(() => {
     setSelected(new Set());
-    setSelecting(false);
     setPreviewId(null);
     setCoverOpen(false);
     setPublishOpen(false);
@@ -988,7 +1014,7 @@ export default function App() {
     }
   }
 
-  function upload(files: FileList | File[]) {
+  function startUpload(files: FileList | File[]) {
     if (!user || !albumId || publicView || tab === 'trash') return;
     if (uploadJobRef.current) {
       tell(t('请先完成或取消本次上传，再选择其他照片'));
@@ -1023,6 +1049,97 @@ export default function App() {
     if (selection.large.length) setPendingUpload(job);
     else void runUpload(job, false);
   }
+  // The file picker opens immediately. Only an upload without a selected collection
+  // needs this metadata request; the existing original-file upload pipeline stays intact.
+  async function upload(files: FileList | File[]) {
+    if (!user) {
+      requestLogin('upload');
+      return;
+    }
+    const selectedFiles = Array.from(files);
+    if (!selectedFiles.length) return;
+    if (uploadJobRef.current || defaultUploadRequest.current || queuedDefaultUpload) {
+      tell(t('请先完成或取消本次上传，再选择其他照片'));
+      return;
+    }
+    if (!publicView && albumId && tab !== 'trash') {
+      startUpload(selectedFiles);
+      return;
+    }
+    const request = { controller: new AbortController(), userId: user.id, path, tab, albumId };
+    defaultUploadRequest.current = request;
+    setUploadLocked(true);
+    let queued = false;
+    try {
+      const { album: target } = await api<{ album: Album }>('/albums/default', {
+        method: 'POST',
+        signal: request.controller.signal,
+      });
+      if (
+        defaultUploadRequest.current !== request ||
+        uploadUserRef.current !== request.userId ||
+        routeRef.current !== request.path ||
+        uploadTabRef.current !== request.tab ||
+        activeAlbumRef.current !== request.albumId
+      )
+        return;
+      defaultUploadRequest.current = null;
+      setAlbums((current) => [target, ...current.filter((item) => item.id !== target.id)]);
+      setAlbumId(target.id);
+      setTab('projects');
+      navigate('/library');
+      reload();
+      setQueuedDefaultUpload({ files: selectedFiles, userId: request.userId, albumId: target.id });
+      queued = true;
+    } catch (error) {
+      if (!request.controller.signal.aborted && uploadUserRef.current === request.userId)
+        tell((error as Error).message);
+    } finally {
+      if (defaultUploadRequest.current === request) {
+        defaultUploadRequest.current = null;
+        if (!queued && uploadUserRef.current === request.userId) setUploadLocked(false);
+      }
+    }
+  }
+  useEffect(() => {
+    if (!queuedDefaultUpload) return;
+    setQueuedDefaultUpload(null);
+    setUploadLocked(false);
+    if (
+      user?.id !== queuedDefaultUpload.userId ||
+      albumId !== queuedDefaultUpload.albumId ||
+      path !== '/library' ||
+      tab !== 'projects'
+    )
+      return;
+    startUpload(queuedDefaultUpload.files);
+  }, [queuedDefaultUpload, user?.id, albumId, path, tab]);
+
+  async function openMainCollection() {
+    const owner = user?.id;
+    const requestedPath = path;
+    const requestedTab = tab;
+    const requestedAlbum = albumId;
+    if (!owner || uploadLocked) return;
+    setWorking(true);
+    try {
+      const { album: target } = await api<{ album: Album }>('/albums/default', { method: 'POST' });
+      if (
+        uploadUserRef.current !== owner ||
+        routeRef.current !== requestedPath ||
+        uploadTabRef.current !== requestedTab ||
+        (activeAlbumRef.current !== requestedAlbum && activeAlbumRef.current !== target.id)
+      )
+        return;
+      setAlbums((current) => [target, ...current.filter((item) => item.id !== target.id)]);
+      setAlbumId(target.id);
+      reload();
+    } catch (error) {
+      if (uploadUserRef.current === owner) tell((error as Error).message);
+    } finally {
+      if (uploadUserRef.current === owner) setWorking(false);
+    }
+  }
   async function importDemo() {
     const epoch = authEpoch.current;
     const requestedPath = path;
@@ -1052,7 +1169,6 @@ export default function App() {
       }
       if (currentScopeRef.current !== scope) return;
       setSelected(new Set());
-      setSelecting(false);
       setDeleteOpen(false);
       reload();
       tell(patch.deleted ? t('已移入回收站，可随时恢复') : t('已更新选片标记'));
@@ -1091,7 +1207,6 @@ export default function App() {
     setAlbum(data.album);
     setPublishOpen(false);
     setSelected(new Set());
-    setSelecting(false);
     reload();
     tell(
       settings.photoIds.length
@@ -1105,9 +1220,9 @@ export default function App() {
     kind: PendingIntent['kind'],
     photo?: Photo,
     workspaceTab?: PendingIntent['workspaceTab'],
-    register = false,
+    register?: boolean,
   ) {
-    setAuthRegister(register);
+    setAuthRegister(register === true || shouldStartWithRegistration());
     setAuthIntent({
       kind,
       path: route,
@@ -1129,12 +1244,7 @@ export default function App() {
       requestLogin('upload');
       return;
     }
-    if (!publicView && albumId && tab !== 'trash') fileInput.current?.click();
-    else {
-      setUploadGuide(true);
-      setTab('projects');
-      navigate('/library');
-    }
+    fileInput.current?.click();
   }
   async function favoritePhoto(photo: Photo) {
     if (!user) {
@@ -1302,7 +1412,6 @@ export default function App() {
       setAuthIntent(null);
   }, [path, authIntent]);
   const selectPhoto = (id: string) => {
-    setSelecting(true);
     setSelected((current) => {
       const next = new Set(current);
       next.has(id) ? next.delete(id) : next.add(id);
@@ -1344,10 +1453,10 @@ export default function App() {
           e.preventDefault();
           dragDepth.current = 0;
           setDragging(false);
-          if (!user || publicView) {
+          if (!user) {
             requestUpload();
             tell(t('进入自己的相册后，请重新选择要上传的照片'));
-          } else upload(e.dataTransfer.files);
+          } else void upload(e.dataTransfer.files);
         }
       }}
     >
@@ -1374,7 +1483,15 @@ export default function App() {
         id="collection"
         data-view={publicView ? 'public' : 'private'}
         data-section={
-          favoritesView ? 'favorites' : libraryView ? 'albums' : trashView ? 'trash' : undefined
+          favoritesView
+            ? 'favorites'
+            : libraryView
+              ? 'albums'
+              : selectionView
+                ? 'selection'
+                : trashView
+                  ? 'trash'
+                  : undefined
         }
       >
         <aside className="studio-sidebar">
@@ -1432,9 +1549,9 @@ export default function App() {
         </aside>
         <div className="studio-content">
           <header
-            className={`studio-header${feedView || libraryView || trashView ? ' collection-header' : ''}${trashView ? ' trash-header' : ''}`}
+            className={`studio-header${feedView || workspaceView || trashView ? ' collection-header' : ''}${trashView ? ' trash-header' : ''}`}
           >
-            {feedView || libraryView || trashView ? (
+            {feedView || workspaceView || trashView ? (
               <section
                 className={`collection-heading${trashView ? ' trash-heading' : ''}`}
                 aria-labelledby="collection-title"
@@ -1444,18 +1561,22 @@ export default function App() {
                     ? 'Frames worth keeping.'
                     : libraryView
                       ? 'My albums.'
-                      : trashView
-                        ? t('回收站')
-                        : 'The public collection.'}
+                      : selectionView
+                        ? 'Photo selection.'
+                        : trashView
+                          ? t('回收站')
+                          : 'The public collection.'}
                 </h1>
                 <p>
                   {favoritesView
                     ? 'A little collection of everything that moves you.'
                     : libraryView
                       ? 'A personal space for every photograph.'
-                      : trashView
-                        ? t('被移除的照片暂存在这里，恢复后会回到原来的项目。')
-                        : 'Extraordinary moments. A thousand ways of seeing.'}
+                      : selectionView
+                        ? 'Review your photographs and keep the frames you love.'
+                        : trashView
+                          ? t('被移除的照片暂存在这里，恢复后会回到原来的项目。')
+                          : 'Extraordinary moments. A thousand ways of seeing.'}
                 </p>
               </section>
             ) : (
@@ -1529,8 +1650,9 @@ export default function App() {
             multiple
             hidden
             onChange={(e) => {
-              if (e.target.files) upload(e.target.files);
+              const files = Array.from(e.target.files || []);
               e.target.value = '';
+              void upload(files);
             }}
           />
           {feedView ? (
@@ -1604,7 +1726,6 @@ export default function App() {
                       key={photo.id}
                       photo={photo}
                       selected={false}
-                      selecting={false}
                       readOnly
                       onOpen={() => openPhoto(photo)}
                       onSelect={() => {}}
@@ -1662,17 +1783,10 @@ export default function App() {
                 <div className="upload-guide" role="status">
                   <div>
                     <strong>{t('准备上传你的照片')}</strong>
-                    <p>
-                      {albumId
-                        ? t('请选择本地照片，上传后默认仅你可见。')
-                        : t('先创建一个拍摄项目，再选择本地照片。')}
-                    </p>
+                    <p>{t('请选择本地照片，上传后默认仅你可见。')}</p>
                   </div>
-                  <button
-                    className="button button-primary"
-                    onClick={() => (albumId ? fileInput.current?.click() : setCreateOpen(true))}
-                  >
-                    {albumId ? t('选择照片') : t('新建项目并上传')}
+                  <button className="button button-primary" onClick={requestUpload}>
+                    {t('选择照片')}
                   </button>
                   <button
                     className="icon-button"
@@ -1684,14 +1798,27 @@ export default function App() {
                 </div>
               )}
               {!publicView && tab !== 'trash' && (
-                <div className={`album-rail${libraryView ? ' library-toolbar' : ''}`}>
+                <div className={`album-rail${workspaceView ? ' library-toolbar' : ''}`}>
                   <span className="rail-label">
-                    {libraryView && <Images size={18} aria-hidden="true" />}
+                    {workspaceView && <Images size={18} aria-hidden="true" />}
                     {t('我的拍摄项目')}
-                    <span>{albums.length.toString().padStart(2, '0')}</span>
+                    <span>
+                      {(albums.length + (albums.some((item) => item.isDefault) ? 0 : 1))
+                        .toString()
+                        .padStart(2, '0')}
+                    </span>
                   </span>
-                  {albums.length > 0 && (
+                  {
                     <div className="album-tabs">
+                      {!albums.some((item) => item.isDefault) && (
+                        <button
+                          className={!albumId ? 'active' : ''}
+                          onClick={() => void openMainCollection()}
+                          disabled={working || uploadLocked}
+                        >
+                          <span>Main collection</span>
+                        </button>
+                      )}
                       {albums.map((a) => (
                         <button
                           key={a.id}
@@ -1704,7 +1831,7 @@ export default function App() {
                         </button>
                       ))}
                     </div>
-                  )}
+                  }
                   <button className="rail-create" onClick={() => setCreateOpen(true)}>
                     <Plus size={15} />
                     <span>{t('新建项目')}</span>
@@ -1725,7 +1852,7 @@ export default function App() {
               ) : (publicView || tab !== 'trash') && album ? (
                 <>
                   <section
-                    className={`project-hero ${hero ? '' : 'hero-empty'}`}
+                    className={`project-hero ${hero ? '' : 'hero-empty'}${!publicView ? ' is-workspace' : ''}`}
                     aria-label={t('相册大图')}
                   >
                     {hero && (
@@ -1739,33 +1866,33 @@ export default function App() {
                     )}
                     <div className="hero-shade" />
                     <div className="hero-content">
-                      <p className="eyebrow">
-                        {publicView
-                          ? 'A PHOTOGRAPHIC JOURNAL'
-                          : `YOUR PROJECT / ${String(Math.max(1, albums.findIndex((a) => a.id === album.id) + 1)).padStart(2, '0')}`}
-                      </p>
+                      {publicView && <p className="eyebrow">A PHOTOGRAPHIC JOURNAL</p>}
                       <h1>{album.title}</h1>
-                      <p className="hero-description">
-                        {album.description || t('用镜头收藏瞬间，让光影讲述故事。')}
-                      </p>
-                      <div className="hero-details">
-                        <span>{formatDate(album.createdAt)}</span>
-                        <span className="tiny-dot" />
-                        <span>
-                          {album.photoCount}
-                          {t(' 张照片')}
-                        </span>
-                        {album.location && (
-                          <>
+                      {publicView && (
+                        <>
+                          <p className="hero-description">
+                            {album.description || t('用镜头收藏瞬间，让光影讲述故事。')}
+                          </p>
+                          <div className="hero-details">
+                            <span>{formatDate(album.createdAt)}</span>
                             <span className="tiny-dot" />
-                            <span>{album.location}</span>
-                          </>
-                        )}
-                      </div>
-                      <span className="privacy-label">
-                        {album.isPublic ? <Globe size={14} /> : <LockKeyhole size={14} />}
-                        {album.isPublic ? t('公开作品集') : t('私密项目')}
-                      </span>
+                            <span>
+                              {album.photoCount}
+                              {t(' 张照片')}
+                            </span>
+                            {album.location && (
+                              <>
+                                <span className="tiny-dot" />
+                                <span>{album.location}</span>
+                              </>
+                            )}
+                          </div>
+                          <span className="privacy-label">
+                            {album.isPublic ? <Globe size={14} /> : <LockKeyhole size={14} />}
+                            {album.isPublic ? t('公开作品集') : t('私密项目')}
+                          </span>
+                        </>
+                      )}
                       {!publicView && (
                         <div className="hero-actions">
                           <button
@@ -1792,6 +1919,35 @@ export default function App() {
                             <Settings2 size={16} />
                             {t('封面与轮播')}
                           </button>
+                        </div>
+                      )}
+                      {!publicView && activePhotos.length > 0 && (
+                        <div className="analysis-summary">
+                          <div className="analysis-title">
+                            <ShieldCheck size={17} />
+                            <span>
+                              {analyzing
+                                ? t('正在整理你的照片')
+                                : album.analysisStatus === 'complete' ||
+                                    activePhotos.some((p) => p.sharpness != null)
+                                  ? t('分析已完成')
+                                  : t('等待智能分析')}
+                            </span>
+                          </div>
+                          <div className="analysis-stats">
+                            <button onClick={() => changeFilter('duplicates')}>
+                              <strong>{stats.duplicates}</strong>
+                              <span>{t('重复候选')}</span>
+                            </button>
+                            <button onClick={() => changeFilter('similar')}>
+                              <strong>{stats.similarGroups}</strong>
+                              <span>{t('相似分组')}</span>
+                            </button>
+                            <button onClick={() => changeFilter('blur')}>
+                              <strong>{stats.blurry}</strong>
+                              <span>{t('疑似模糊')}</span>
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1859,35 +2015,6 @@ export default function App() {
                         </button>
                       </div>
                     )}
-                    {!publicView && activePhotos.length > 0 && (
-                      <div className="analysis-summary">
-                        <div className="analysis-title">
-                          <ShieldCheck size={17} />
-                          <span>
-                            {analyzing
-                              ? t('正在整理你的照片')
-                              : album.analysisStatus === 'complete' ||
-                                  activePhotos.some((p) => p.sharpness != null)
-                                ? t('分析已完成')
-                                : t('等待智能分析')}
-                          </span>
-                        </div>
-                        <div className="analysis-stats">
-                          <button onClick={() => changeFilter('duplicates')}>
-                            <strong>{stats.duplicates}</strong>
-                            <span>{t('重复候选')}</span>
-                          </button>
-                          <button onClick={() => changeFilter('similar')}>
-                            <strong>{stats.similarGroups}</strong>
-                            <span>{t('相似分组')}</span>
-                          </button>
-                          <button onClick={() => changeFilter('blur')}>
-                            <strong>{stats.blurry}</strong>
-                            <span>{t('疑似模糊')}</span>
-                          </button>
-                        </div>
-                      </div>
-                    )}
                   </section>
                   <main className="photo-workspace">
                     <div className="workspace-heading">
@@ -1925,19 +2052,6 @@ export default function App() {
                           <option value="name">{t('文件名称')}</option>
                           {!publicView && <option value="rating">{t('星级优先')}</option>}
                         </select>
-                        <Grid2X2 size={18} className="grid-indicator" />
-                        {!publicView && (
-                          <button
-                            className={`button button-small button-secondary ${selecting ? 'is-active' : ''}`}
-                            onClick={() => {
-                              setSelecting(!selecting);
-                              setSelected(new Set());
-                            }}
-                          >
-                            <CheckCheck size={15} />
-                            {selecting ? t('结束选择') : t('批量选择')}
-                          </button>
-                        )}
                       </div>
                     </div>
                     {!publicView ? (
@@ -1953,7 +2067,6 @@ export default function App() {
                             {f.id === 'keep' && stats.kept > 0 && <span>{stats.kept}</span>}
                           </button>
                         ))}
-                        <span className="workspace-hint">{t('点击照片进入沉浸预览')}</span>
                       </div>
                     ) : (
                       <div className="public-description">
@@ -1995,7 +2108,6 @@ export default function App() {
                               key={p.id}
                               photo={p}
                               selected={selected.has(p.id)}
-                              selecting={selecting}
                               readOnly={publicView}
                               onOpen={() => openPhoto(p)}
                               onFavorite={() => void favoritePhoto(p)}
@@ -2066,7 +2178,6 @@ export default function App() {
                             ? t('仅主动选中的照片已公开，其余照片继续私密')
                             : t('当前项目仅你可见')}
                         </span>
-                        <span>{t('本地智能筛选仅提供建议，照片由你决定取舍。')}</span>
                       </div>
                     )}
                   </main>
@@ -2130,11 +2241,15 @@ export default function App() {
                     className="collection-empty"
                     icon={Images}
                     title="A home for your photographs"
-                    text="Create your first album to start collecting your moments."
+                    text="Upload your photographs to get started. Create extra albums whenever you need them."
                   >
                     <div className="library-empty-actions">
-                      <button className="button button-primary" onClick={() => setCreateOpen(true)}>
-                        {t('新建拍摄项目')}
+                      <button
+                        className="button button-primary"
+                        onClick={requestUpload}
+                        disabled={uploadLocked}
+                      >
+                        {t('上传照片')}
                       </button>
                       <button
                         className="button button-secondary"
@@ -2153,7 +2268,7 @@ export default function App() {
           <footer className="app-footer">
             <span>{t('光影 / AI 相册')}</span>
             <span>MADE FOR THE WAY YOU SEE.</span>
-            {(publicView || libraryView || trashView) && (
+            {(publicView || workspaceView || trashView) && (
               <button className="text-button" onClick={() => navigate('/explore')}>
                 <ArrowLeft size={13} />
                 <span>{t('所有公开作品')}</span>
@@ -2265,8 +2380,11 @@ export default function App() {
           <Upload size={45} />
           <h2>{t('把这一刻，交给光影')}</h2>
           <p>
-            {t('松开鼠标，上传到「')}
-            {album?.title}」
+            {`Drop photos into ${
+              !publicView && tab !== 'trash' && albumId
+                ? albums.find((item) => item.id === albumId)?.title || 'the current album'
+                : 'Main collection'
+            }.`}
           </p>
         </div>
       )}

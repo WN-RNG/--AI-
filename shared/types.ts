@@ -16,6 +16,7 @@ export interface User {
 export interface Album {
   id: string;
   title: string;
+  isDefault?: boolean;
   description: string;
   location: string;
   createdAt: string;

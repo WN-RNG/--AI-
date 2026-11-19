@@ -98,6 +98,10 @@ export async function createApplication({
     CREATE INDEX IF NOT EXISTS photos_album ON photos(album_id, deleted_at);
     CREATE INDEX IF NOT EXISTS albums_user ON albums(user_id);
     CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
+    CREATE TABLE IF NOT EXISTS home_collections (
+      user_id TEXT PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      album_id TEXT NOT NULL UNIQUE REFERENCES albums(id)
+    );
   `);
   // An atomic, one-time upgrade preserves only the photos already exposed by
   // the old album-level flag. New uploads always use the private column defaults.
@@ -276,6 +280,9 @@ export async function createApplication({
     return {
       id: row.id,
       title: row.title,
+      isDefault: !!db
+        .prepare('SELECT 1 FROM home_collections WHERE user_id=? AND album_id=?')
+        .get(row.user_id, row.id),
       description: row.description,
       location: row.location,
       createdAt: row.created_at,
@@ -530,7 +537,7 @@ export async function createApplication({
       for (const [ip, value] of loginAttempts) if (value.until < now) loginAttempts.delete(ip);
     next();
   };
-  // 账号接口：会话查询、邀请注册、登录与退出。
+  // 账号接口：会话查询、开放注册、登录与退出。
   app.get('/api/auth/session', (req, res) => res.json({ user: req.user || null }));
   app.post(
     '/api/auth/register',
@@ -543,8 +550,6 @@ export async function createApplication({
         throw problem(400, '请填写有效的昵称和邮箱');
       if (typeof password !== 'string' || password.length < 8 || password.length > 128)
         throw problem(400, '密码需要 8 至 128 个字符');
-      if (req.body.inviteCode !== (process.env.INVITE_CODE || 'FRAME-FIRST-100'))
-        throw problem(403, '邀请码不正确');
       if (db.prepare('SELECT id FROM users WHERE email=?').get(email))
         throw problem(409, '该邮箱已注册');
       const salt = randomBytes(16).toString('hex');
@@ -594,10 +599,18 @@ export async function createApplication({
     res.json({ ok: true });
   });
   // 相册接口：只允许当前用户读写自己的项目与封面配置。
+  const userAlbums = (uid) =>
+    db
+      .prepare(
+        `
+    SELECT a.* FROM albums a
+    LEFT JOIN home_collections home ON home.album_id=a.id AND home.user_id=a.user_id
+    WHERE a.user_id=? ORDER BY (home.album_id IS NOT NULL) DESC,a.created_at DESC,a.id DESC
+  `,
+      )
+      .all(uid);
   app.get('/api/workspace', requireUser, (req, res) => {
-    const rows = db
-      .prepare('SELECT * FROM albums WHERE user_id=? ORDER BY created_at DESC,id DESC')
-      .all(req.user.id);
+    const rows = userAlbums(req.user.id);
     res.json({
       albums: rows.map(albumJSON),
       album: rows[0] ? albumJSON(rows[0]) : null,
@@ -613,10 +626,7 @@ export async function createApplication({
   });
   app.get('/api/albums', requireUser, (req, res) =>
     res.json({
-      albums: db
-        .prepare('SELECT * FROM albums WHERE user_id=? ORDER BY created_at DESC,id DESC')
-        .all(req.user.id)
-        .map(albumJSON),
+      albums: userAlbums(req.user.id).map(albumJSON),
     }),
   );
   const createAlbum = (uid, input) => {
@@ -636,6 +646,34 @@ export async function createApplication({
     );
     return db.prepare('SELECT * FROM albums WHERE id=?').get(id);
   };
+  // One private default collection per account. Existing albums and photos are never reassigned.
+  app.post('/api/albums/default', requireUser, (req, res) => {
+    let row;
+    let created = false;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      row = db
+        .prepare(
+          `SELECT a.* FROM home_collections home JOIN albums a ON a.id=home.album_id
+        WHERE home.user_id=? AND a.user_id=?`,
+        )
+        .get(req.user.id, req.user.id);
+      if (!row) {
+        row = createAlbum(req.user.id, { title: 'Main collection' });
+        db.prepare('INSERT INTO home_collections(user_id,album_id) VALUES(?,?)').run(
+          req.user.id,
+          row.id,
+        );
+        created = true;
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    if (created) notify(req.user.id, { type: 'change', albumId: row.id });
+    res.status(created ? 201 : 200).json({ album: albumJSON(row) });
+  });
   app.post('/api/albums', requireUser, (req, res) => {
     const album = createAlbum(req.user.id, req.body);
     notify(req.user.id, { type: 'change', albumId: album.id });

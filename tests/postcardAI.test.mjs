@@ -109,7 +109,6 @@ test('real HTTP jobs enforce consent, ownership, budget, deduplication, revocati
           email: `ai-${name}@example.test`,
           name,
           password: 'Test-Password-42!',
-          inviteCode: process.env.INVITE_CODE || 'FRAME-FIRST-100',
         })
       ).status,
       201,

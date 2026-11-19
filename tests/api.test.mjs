@@ -86,9 +86,9 @@ test('valid data and server errors retain the existing same-origin request contr
     },
   );
   await withFetch(
-    async () => ({ ok: false, status: 403, json: async () => ({ error: '邀请码不正确' }) }),
+    async () => ({ ok: false, status: 409, json: async () => ({ error: '该邮箱已注册' }) }),
     async () => {
-      await assert.rejects(api('/auth/register'), /invitation code/i);
+      await assert.rejects(api('/auth/register'), /email.*registered/i);
     },
   );
 });

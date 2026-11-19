@@ -52,6 +52,64 @@ body :is(h1, h2, h3, p, label, small, dt, dd) {
 .pc-template-options .pc-template {
   text-align: left;
 }
+.auth-dialog .auth-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 8px;
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+}
+.editorial-app .workspace-controls {
+  margin-left: auto;
+  justify-content: flex-end;
+}
+.editorial-app .project-hero.is-workspace {
+  height: auto;
+  min-height: 260px;
+}
+.editorial-app .project-hero.is-workspace.hero-empty {
+  min-height: 0;
+}
+.editorial-app .project-hero.is-workspace .hero-content {
+  position: relative;
+  inset: auto;
+  width: calc(100% - 220px);
+  padding: 24px;
+}
+.editorial-app .project-hero.is-workspace .hero-content h1 {
+  margin: 0;
+}
+.editorial-app .project-hero.is-workspace .analysis-summary {
+  position: static;
+  width: fit-content;
+  max-width: 100%;
+  margin: 16px 0 0;
+}
+.editorial-app .project-hero.is-workspace .analysis-stats {
+  flex-wrap: wrap;
+  gap: 16px 24px;
+}
+@media (max-width: 760px) {
+  .editorial-app .project-hero.is-workspace {
+    padding: 0;
+  }
+  .editorial-app .project-hero.is-workspace .hero-content {
+    width: 100%;
+    padding: 20px;
+  }
+  .editorial-app .project-hero.is-workspace .hero-top-actions {
+    position: relative;
+    inset: auto;
+    align-self: flex-start;
+    margin: 0 20px 16px;
+  }
+  .editorial-app .project-hero.is-workspace .hero-controls {
+    margin: 0 20px 20px;
+  }
+}
 .pc-template-tag {
   padding-inline: 8px;
 }

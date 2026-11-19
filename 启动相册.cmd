@@ -53,11 +53,7 @@ if /i "%ALBUM_OPEN_BROWSER%"=="0" (
   echo 服务就绪后会自动打开浏览器。
 )
 echo 数据目录："%DATA_DIR%"
-if defined INVITE_CODE (
-  echo 邀请码：使用你设置的 INVITE_CODE 环境变量。
-) else (
-  echo 本地默认邀请码：FRAME-FIRST-100
-)
+echo 首次使用填写名字、邮箱和密码即可注册，无需邀请码。
 echo 保持此窗口开启，关闭窗口会停止本地服务。
 echo.
 

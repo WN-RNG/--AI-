@@ -12,7 +12,6 @@ import sharp from 'sharp';
 import { createApplication } from '../server/app.mjs';
 
 const password = 'Publication-test-42!';
-const inviteCode = process.env.INVITE_CODE || 'FRAME-FIRST-100';
 const publicKeys = [
   'id',
   'albumId',
@@ -87,7 +86,7 @@ const ok = ({ response, body }) =>
 async function register(client, name) {
   const result = await client.json('/api/auth/register', {
     method: 'POST',
-    json: { name, email: `${name}@example.test`, password, inviteCode },
+    json: { name, email: `${name}@example.test`, password },
   });
   ok(result);
   return result.body.user;

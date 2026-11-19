@@ -17,7 +17,6 @@ import {
   UPLOAD_BATCH_SIZE,
 } from '../shared/uploadPolicy.ts';
 
-const inviteCode = process.env.INVITE_CODE || 'FRAME-FIRST-100';
 const password = 'Album-Test-42!';
 
 async function fixture(t, existingDataDir, applicationOptions = {}) {
@@ -94,7 +93,7 @@ function expectDenied(response) {
 async function register(client, username) {
   const result = await client.json('/api/auth/register', {
     method: 'POST',
-    json: { email: `${username}@example.test`, password, name: username, inviteCode },
+    json: { email: `${username}@example.test`, password, name: username },
   });
   expectSuccess(result.response, result.body);
   assert.ok(result.body.user?.id, 'Registration returns the authenticated account');
@@ -147,7 +146,7 @@ async function detail(client, albumId) {
   return result.body;
 }
 
-test('invite registration, login, session revocation and albums/files survive a restart', async (t) => {
+test('open registration, login, session revocation and albums/files survive a restart', async (t) => {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'frame-restart-test-'));
   const applications = [];
   t.after(async () => {
@@ -161,14 +160,19 @@ test('invite registration, login, session revocation and albums/files survive a 
 
   const denied = await client.json('/api/auth/register', {
     method: 'POST',
-    json: { email: 'owner@example.test', name: 'Owner', password, inviteCode: 'wrong-invite' },
+    json: { email: 'owner@example.test', name: 'Owner', password: 'short' },
   });
-  assert.equal(denied.response.status, 403);
+  assert.equal(denied.response.status, 400);
   assert.equal(client.cookie, '');
 
   const user = await register(client, 'owner');
   assert.equal(user.email, 'owner@example.test');
   assert.equal(user.password, undefined);
+  const duplicate = await client.json('/api/auth/register', {
+    method: 'POST',
+    json: { email: 'OWNER@example.test', name: 'Duplicate', password },
+  });
+  assert.equal(duplicate.response.status, 409);
   const created = await album(client, 'Persistent private album');
   assert.equal(created.isPublic, false);
   const original = await sample('jpeg', true);
@@ -205,6 +209,70 @@ test('invite registration, login, session revocation and albums/files survive a 
   const logout = await loggingIn.json('/api/auth/logout', { method: 'POST' });
   expectSuccess(logout.response, logout.body);
   assert.equal((await second.client(tokenBeforeLogout).json('/api/auth/session')).body.user, null);
+});
+
+test('default collections are unique, private, independent of custom albums and survive a restart', async (t) => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'frame-default-collection-'));
+  const applications = [];
+  t.after(async () => {
+    for (const application of applications) await application.stop();
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+  const first = await fixture(t, dataDir);
+  applications.push(first);
+  const alice = first.client(),
+    bob = first.client(),
+    guest = first.client();
+  await register(alice, 'default-alice');
+  await register(bob, 'default-bob');
+  assert.equal((await guest.json('/api/albums/default', { method: 'POST' })).response.status, 401);
+  const custom = await album(alice, 'Main collection');
+  const original = await sample('jpeg', true);
+  const customUpload = await upload(alice, custom.id, [{ name: 'custom.jpg', bytes: original }]);
+  expectSuccess(customUpload.response, customUpload.body);
+  const attempts = await Promise.all(
+    [0, 1].map(() => alice.json('/api/albums/default', { method: 'POST' })),
+  );
+  assert.deepEqual(attempts.map((result) => result.response.status).sort(), [200, 201]);
+  const home = attempts[0].body.album;
+  assert.ok(home.isDefault);
+  assert.notEqual(
+    home.id,
+    custom.id,
+    'An existing identically named custom album is not repurposed',
+  );
+  assert.equal(attempts[1].body.album.id, home.id);
+  assert.equal(home.isPublic, false);
+  const own = await upload(alice, home.id, [{ name: 'home.jpg', bytes: original }]);
+  expectSuccess(own.response, own.body);
+  assert.equal(own.body.photos[0].albumId, home.id);
+  assert.equal((await detail(alice, custom.id)).photos.length, 1);
+  assert.equal((await detail(alice, home.id)).photos.length, 1);
+  const bobHome = await bob.json('/api/albums/default', {
+    method: 'POST',
+    json: { userId: 'ignored', albumId: home.id },
+  });
+  assert.notEqual(bobHome.body.album.id, home.id);
+  assert.equal((await bob.json('/api/albums/' + home.id)).response.status, 404);
+  assert.equal(
+    (await guest.request('/api/photos/' + own.body.photos[0].id + '/thumb')).status,
+    404,
+  );
+  await album(alice, 'A later custom album');
+  const workspace = await alice.json('/api/workspace');
+  assert.equal(workspace.body.album.id, home.id);
+  assert.equal(workspace.body.albums.filter((item) => item.isDefault).length, 1);
+  const cookie = alice.cookie;
+  await first.stop();
+  const second = await fixture(t, dataDir);
+  applications.push(second);
+  const resumed = second.client(cookie);
+  const retained = await resumed.json('/api/albums/default', { method: 'POST' });
+  assert.equal(retained.response.status, 200);
+  assert.equal(retained.body.album.id, home.id);
+  assert.equal((await detail(resumed, home.id)).photos[0].id, own.body.photos[0].id);
+  const bytes = await resumed.request('/api/photos/' + own.body.photos[0].id + '/file');
+  assert.deepEqual(Buffer.from(await bytes.arrayBuffer()), original);
 });
 
 test('account isolation protects album APIs, originals, thumbnails, upload and photo mutation', async (t) => {

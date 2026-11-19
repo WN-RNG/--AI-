@@ -1,6 +1,6 @@
 import { useI18n } from '../i18n';
 import { useState } from 'react';
-import { LockKeyhole } from 'lucide-react';
+import { shouldStartWithRegistration } from '../authPreference';
 import type { Photo, User } from '../../shared/types';
 import { AuthForm } from './AuthView';
 import Modal from './Modal';
@@ -63,10 +63,10 @@ export default function AuthDialog({
   photo,
   onClose,
   onLogin,
-  initialRegister = false,
+  initialRegister,
 }: AuthDialogProps) {
   const { t } = useI18n();
-  const [register, setRegister] = useState(initialRegister);
+  const [register, setRegister] = useState(() => initialRegister ?? shouldStartWithRegistration());
   const text = copy[intent];
   const contextPhoto = photo as
     | (Photo & {
@@ -75,12 +75,13 @@ export default function AuthDialog({
       })
     | undefined;
   return (
-    <Modal
-      title={intent === 'login' && register ? t('开启你的创作空间') : t(text.title)}
-      onClose={onClose}
-    >
+    <Modal title={register ? t('开启你的创作空间') : t(text.title)} onClose={onClose}>
       <div className="auth-dialog">
-        <p className="auth-dialog-intro">{t(text.text)}</p>
+        <p className="auth-dialog-intro">
+          {register && intent === 'login'
+            ? 'Create an account to organize and share your photography.'
+            : t(text.text)}
+        </p>
         {contextPhoto && (
           <div className="auth-dialog-photo">
             <img src={contextPhoto.thumbnailUrl || contextPhoto.previewUrl} alt="" />
@@ -96,23 +97,12 @@ export default function AuthDialog({
         <div className="auth-dialog-form">
           <AuthForm
             onLogin={onLogin}
-            initialRegister={initialRegister}
+            initialRegister={register}
             onModeChange={setRegister}
             loginLabel={text.login}
             registerLabel={text.register}
           />
         </div>
-        <div className="auth-private">
-          <LockKeyhole size={15} />
-          <span>{t('登录不会离开当前页面，取消后仍可继续浏览。')}</span>
-        </div>
-        <button
-          type="button"
-          className="button button-secondary auth-dialog-cancel"
-          onClick={onClose}
-        >
-          {t('暂不登录，继续浏览')}
-        </button>
       </div>
     </Modal>
   );

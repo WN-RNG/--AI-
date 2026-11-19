@@ -3,6 +3,7 @@ import { useI18n } from '../i18n';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Aperture, ArrowUpRight, LockKeyhole, LoaderCircle } from 'lucide-react';
 import { api } from '../api';
+import { rememberAuthentication, shouldStartWithRegistration } from '../authPreference';
 import type { User } from '../../shared/types';
 export interface AuthFormProps {
   onLogin: (user: User) => void;
@@ -16,10 +17,10 @@ export function AuthForm({
   loginLabel = '进入工作台',
   registerLabel = '创建空间',
   onModeChange,
-  initialRegister = false,
+  initialRegister,
 }: AuthFormProps) {
   const { t, language } = useI18n();
-  const [register, setRegister] = useState(initialRegister);
+  const [register, setRegister] = useState(() => initialRegister ?? shouldStartWithRegistration());
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(false);
   useEffect(() => {
@@ -29,7 +30,7 @@ export function AuthForm({
     return () => clearTimeout(timer);
   }, [busy]);
   const [error, setError] = useState('');
-  const [values, setValues] = useState({ name: '', email: '', password: '', inviteCode: '' });
+  const [values, setValues] = useState({ name: '', email: '', password: '' });
   const requestRef = useRef<AbortController | null>(null);
   const submittingRef = useRef(false);
   useEffect(() => () => requestRef.current?.abort(), []);
@@ -50,7 +51,10 @@ export function AuthForm({
         body: JSON.stringify(form),
         signal: controller.signal,
       });
-      if (!controller.signal.aborted) onLogin(data.user);
+      if (!controller.signal.aborted) {
+        rememberAuthentication();
+        onLogin(data.user);
+      }
     } catch (reason) {
       if (!controller.signal.aborted)
         setError(reason instanceof Error ? reason.message : t('认证未完成，请重试。'));
@@ -108,20 +112,6 @@ export function AuthForm({
             disabled={busy}
           />
         </label>
-        {register && (
-          <label>
-            {t('邀请码')}
-            <input
-              name="inviteCode"
-              value={values.inviteCode}
-              onChange={(event) => change('inviteCode', event.target.value)}
-              placeholder={t('输入受邀获得的邀请码')}
-              required
-              autoComplete="off"
-              disabled={busy}
-            />
-          </label>
-        )}
         {waiting && (
           <p className="muted" role="status">
             {language === 'en'
@@ -161,7 +151,7 @@ export function AuthForm({
             onModeChange?.(next);
           }}
         >
-          {register ? t('登录') : t('受邀注册')}
+          {register ? t('登录') : 'Sign up'}
         </button>
       </p>
     </>
@@ -175,7 +165,7 @@ export default function AuthView({
   onExplore: () => void;
 }) {
   const { t } = useI18n();
-  const [register, setRegister] = useState(false);
+  const [register, setRegister] = useState(shouldStartWithRegistration);
   return (
     <main className="auth-screen">
       <div className="auth-photo" style={{ backgroundImage: 'url(/demo/kyoto-temple.png)' }}>
@@ -215,10 +205,10 @@ export default function AuthView({
           <h2>{register ? t('开启你的创作空间') : t('欢迎回到光影')}</h2>
           <p className="muted">
             {register
-              ? t('使用邀请码，创建你的私密摄影空间。')
+              ? 'Create a private space for your photography.'
               : t('你的照片、灵感与作品，在这里相遇。')}
           </p>
-          <AuthForm onLogin={onLogin} onModeChange={setRegister} />
+          <AuthForm onLogin={onLogin} initialRegister={register} onModeChange={setRegister} />
           <div className="auth-private">
             <LockKeyhole size={16} />
             <span>{t('照片默认私密，由你决定哪些作品公开。')}</span>
